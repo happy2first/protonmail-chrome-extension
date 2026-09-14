@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Proton → Personal Mail MCP",
+  "version": "0.1.0",
+  "description": "仅在点击连接时，将所选 Proton 会话导入自己的 Personal Mail MCP。",
+  "minimum_chrome_version": "120",
+  "permissions": ["cookies", "scripting"],
+  "host_permissions": ["https://mail.proton.me/*", "https://mail.mcp.happyfirst.top/*"],
+  "action": {"default_popup": "popup.html", "default_title": "连接 Personal Mail MCP"},
+  "content_security_policy": {"extension_pages": "default-src 'self'; script-src 'self'; object-src 'none'; connect-src 'none'; base-uri 'none'"}
+}
