@@ -1,6 +1,6 @@
 # Proton → Personal Mail MCP
 
-桌面 Chrome / Edge Manifest V3 扩展。把当前浏览器中选定的 Proton Mail 会话导入自己的 `mail.mcp.happyfirst.top`，不读取、保存或上传 Proton 密码。仅支持 `https://mail.proton.me`。
+桌面 Chrome / Edge Manifest V3 扩展。把当前浏览器中选定的 Proton Browser Session Bundle v2 导入自己的 `mail.mcp.happyfirst.top`，不读取、保存或上传 Proton 密码。会在 `mail.proton.me` 读取会话，在 `account.proton.me` 同源重放 KeySalt 请求。
 
 ## 先部署配套服务端
 
@@ -19,9 +19,10 @@
 4. 选择仓库内 **extension** 文件夹（里面直接有 `manifest.json`），不要选仓库根目录。
 5. 使用普通窗口登录 `https://mail.proton.me`。
 6. 打开 `https://mail.mcp.happyfirst.top/proton/import` 并完成 Cloudflare Access 登录。部署过服务端更新后刷新此页。保持页面打开。
-7. 切回 Proton 标签页，点击扩展图标。扩展会识别 UID 并请求 users、addresses 和 keys/salts。多个会话需要先选择，再核对显示的邮箱地址。
-8. 选择对应 MCP 账号，核对固定上传域名，点击“一键连接 Personal Mail MCP”。**连接过程中保持 Popup 打开**。
-9. 成功后在 MCP 管理页刷新状态，检查 Session 和 KeySalt。扩展仅检查刷新材料是否存在，不自动执行刷新请求；需要验证实际续期时使用原管理页的测试按钮。
+7. 切回 Proton 标签页，点击扩展图标。扩展会从 Cookie Jar 识别 UID，读取同一 UID 的 `AUTH-*`、`REFRESH-*`、`Session-Id` 与必要辅助 Cookie，并请求 users / addresses。
+8. 扩展会自动打开一个后台 `account.proton.me/mail` 标签页，在该同源环境重放 `GET /api/core/v4/keys/salts`，取得 KeySalt 后自动关闭该临时标签页。多个会话需要先选择，再核对显示的邮箱地址。
+9. 选择对应 MCP 账号，核对固定上传域名，点击“一键连接 Personal Mail MCP”。**连接过程中保持 Popup 打开**。
+10. 成功后在 MCP 管理页刷新状态，检查 AUTH、Session-Id、REFRESH 和 KeySalt。扩展不会在导入阶段主动 refresh；需要验证实际续期时使用管理页“测试自动续期”。
 
 也可从 GitHub Actions 的 `protonmail-chrome-extension-unpacked` artifact 下载扩展文件，解压后加载含 `manifest.json` 的目录。
 
@@ -29,12 +30,12 @@
 
 - `chrome.cookies.getAll({domain:'proton.me',storeId})` 读取正确 Cookie Store，包含受 Path 限制的 HttpOnly Cookie；不会使用 `document.cookie`。
 - 保留 Domain、Path、HttpOnly、Secure、SameSite、HostOnly、Session、Expires（`expirationDate` 为秒，`expiresAt` 为毫秒）。会话 Cookie 的到期时间为 null。
-- 保留所选 UID 的 AUTH/REFRESH 和适用于 mail.proton.me 的辅助 Cookie（如 Session-Id、st），排除其他 UID、其他域名与过期 Cookie。第一版拒绝隐身和分区 Cookie，避免错误重放。
-- API 请求在 Proton 标签页的 **ISOLATED world** 中执行。只读取用户 ID、密钥 ID、地址和 KeySalt；不访问网页存储、密码框、页面 JS 内存，不导出加密/解密私钥。
+- Bundle v2 强制要求同一 UID 的 `AUTH-<UID>`、`REFRESH-<UID>` 与 `Session-Id`，并保留适用于 mail.proton.me 的辅助 Cookie；排除其他 UID、其他域名与过期 Cookie。第一版拒绝隐身和分区 Cookie，避免错误重放。
+- mail API 请求在 `mail.proton.me` 标签页的 **ISOLATED world** 中执行；KeySalt 请求在 `account.proton.me` 同源标签页的 **ISOLATED world** 中执行。只读取用户 ID、密钥 ID、地址和 KeySalt；不访问网页存储、密码框、页面 JS 内存，不导出加密/解密私钥。
 - 使用已登录 MCP 管理页发起同源请求，复用 Access 与 CSRF。令牌有效期 5 分钟，绑定 Access 身份、目标账号、邮箱、UID；使用后失效，失败也必须重新配对。令牌和 Cookie 不进入 URL。
 - 无 service worker、定时器轮询、storage 权限、遥测、控制台敏感输出、远程脚本或可配置上传地址。Popup 只在内存处理敏感数据；关闭后没有持久化副本。JS 字符串无法保证物理内存安全擦除。
 - 服务端独立核对真实邮箱归属和密钥 ID，通过后复用 AES-GCM 加密并原子写入会话和 Cookie。失败不替换原会话。Proton 网页退出登录或撤销 Session 后，服务端会话也可能失效。
-- 固定 API 客户端版本 `web-mail@5.0.0` 位于 `extension/bridge.js`。Proton 非公开接口可能调整；403/9101/版本错误时扩展停止，不自动密码登录、不绕过 2FA 或 Access。
+- 当前协议 Header 版本 `web-mail@5.0.133.5` 与 `web-account@5.0.420.1` 位于 `extension/bridge.js`；它们不是用户凭证，也不要求用户手工复制。Proton 非公开接口可能调整；403/9101/版本错误时扩展停止，不自动密码登录、不绕过 2FA 或 Access。
 
 ## 测试
 
