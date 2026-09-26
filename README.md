@@ -21,8 +21,10 @@
 6. 打开 `https://mail.mcp.happyfirst.top/proton/import` 并完成 Cloudflare Access 登录。部署过服务端更新后刷新此页。保持页面打开。
 7. 切回 Proton 标签页，点击扩展图标。扩展会从 Cookie Jar 识别 UID，读取同一 UID 的 `AUTH-*`、`REFRESH-*`、`Session-Id` 与必要辅助 Cookie，并请求 users / addresses。
 8. 扩展会自动打开一个后台 `account.proton.me/mail` 标签页，在该同源环境重放 `GET /api/core/v4/keys/salts`，取得 KeySalt 后自动关闭该临时标签页。多个会话需要先选择，再核对显示的邮箱地址。
-9. 选择对应 MCP 账号，核对固定上传域名，点击“一键连接 Personal Mail MCP”。**连接过程中保持 Popup 打开**。
-10. 成功后在 MCP 管理页刷新状态，检查 AUTH、Session-Id、REFRESH 和 KeySalt。扩展不会在导入阶段主动 refresh；需要验证实际续期时使用管理页“测试自动续期”。
+9. 选择对应 MCP 账号，点击“预览并连接”。扩展会先显示本次导入的 Proton 邮箱、目标 MCP 账号、UID、Cookie 名称、KeySalt 数量和完整 JSON；此时尚未发起配对或上传 Bundle。
+10. 如需留档或排障，可在确认窗口点击“导出 JSON”保存本次完整导入内容到本地。该文件包含可用 Session Cookie 和 KeySalt，应按敏感凭证保管。
+11. 核对无误后点击“确认导入”。只有此时扩展才创建一次性配对并上传 Bundle。**导入过程中保持 Popup 打开**。
+12. 成功后在 MCP 管理页刷新状态。扩展不会在导入阶段主动 refresh；需要验证实际续期时使用管理页“测试续期”。
 
 也可从 GitHub Actions 的 `protonmail-chrome-extension-unpacked` artifact 下载扩展文件，解压后加载含 `manifest.json` 的目录。
 
@@ -33,7 +35,7 @@
 - Bundle v2 强制要求同一 UID 的 `AUTH-<UID>`、`REFRESH-<UID>` 与 `Session-Id`，并保留适用于 mail.proton.me 的辅助 Cookie；排除其他 UID、其他域名与过期 Cookie。第一版拒绝隐身和分区 Cookie，避免错误重放。
 - mail API 请求在 `mail.proton.me` 标签页的 **ISOLATED world** 中执行；KeySalt 请求在 `account.proton.me` 同源标签页的 **ISOLATED world** 中执行。只读取用户 ID、密钥 ID、地址和 KeySalt；不访问网页存储、密码框、页面 JS 内存，不导出加密/解密私钥。
 - 使用已登录 MCP 管理页发起同源请求，复用 Access 与 CSRF。令牌有效期 5 分钟，绑定 Access 身份、目标账号、邮箱、UID；使用后失效，失败也必须重新配对。令牌和 Cookie 不进入 URL。
-- 无 service worker、定时器轮询、storage 权限、遥测、控制台敏感输出、远程脚本或可配置上传地址。Popup 只在内存处理敏感数据；关闭后没有持久化副本。JS 字符串无法保证物理内存安全擦除。
+- 无 service worker、定时器轮询、storage 权限、遥测、控制台敏感输出、远程脚本或可配置上传地址。Popup 默认只在内存处理敏感数据；只有用户主动点击“导出 JSON”时才会把当前 Bundle 写入本地文件。JS 字符串无法保证物理内存安全擦除。
 - 服务端独立核对真实邮箱归属和密钥 ID，通过后复用 AES-GCM 加密并原子写入会话和 Cookie。失败不替换原会话。Proton 网页退出登录或撤销 Session 后，服务端会话也可能失效。
 - 当前协议 Header 版本 `web-mail@5.0.133.5` 与 `web-account@5.0.420.1` 位于 `extension/bridge.js`；它们不是用户凭证，也不要求用户手工复制。Proton 非公开接口可能调整；403/9101/版本错误时扩展停止，不自动密码登录、不绕过 2FA 或 Access。
 
@@ -43,4 +45,4 @@ Node.js 20+：`npm test`。测试使用虚构 Cookie，不连接真实邮箱。G
 
 已在开发环境通过扩展单元测试、服务端配对/导入测试、原有后端完整测试与 Workers dry-run（最终结果见提交说明）。真实浏览器安装与真实 Proton Session 导入需按上述步骤在桌面验证，未声称通过云端端到端测试。
 
-手动验收：未登录提示、多会话选择、错误目标账号拒绝、成功导入后管理页状态、关闭 Popup 再打开重新检测、无本地敏感存储。不要将 Cookie/KeySalt、配对 token 或包含它们的网络截图贴到 Issue。
+手动验收：未登录提示、多会话选择、导入前预览、取消后不上传、导出 JSON、错误目标账号拒绝、成功导入后管理页状态、关闭 Popup 再打开重新检测。除用户主动导出的 JSON 外，不应留下本地敏感存储。不要将 Cookie/KeySalt、配对 token、导出文件或包含它们的网络截图贴到 Issue。
