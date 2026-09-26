@@ -1,6 +1,6 @@
 # 服务端配套协议 v2
 
-仓库：`happy2first/personal-mail-mcp`。服务端新增 `src/proton/extension-policy.js`、`src/proton/extension-session.js`；`src/entry.js` 加载扩展处理器；`import-page.js` 提供 CSRF meta、配对与导入路由。现有手工导入仍保留为高级兼容模式。
+仓库：`happy2first/personal-mail-mcp`。服务端新增 `src/proton/extension-policy.js`、`src/proton/extension-session.js`；`src/entry.js` 加载扩展处理器；`import-page.js` 提供 CSRF meta、配对与导入路由。管理页仅保留当前高级手工故障排查流程：普通 Session Cookie + 专用 REFRESH Cookie + KeySalt JSON；旧 Session JSON / 旧 REFRESH-* 兼容导入及其通用 `/api/import` 入口已移除。
 
 现有 `/proton/import` 仍必须通过 Cloudflare Access。扩展在该页面的隔离上下文读取 `meta[name=proton-extension-csrf]`，沿用 HttpOnly 双提交 CSRF Cookie。普通跨站请求不放行；不为扩展添加 Access bypass。
 
@@ -31,6 +31,7 @@ Bundle 不包含 Proton 密码、AccessToken、私钥或页面存储内容。
 | GET `/proton/import/api/accounts` | 无 | 脱敏账号列表 |
 | POST `/proton/import/api/extension-pair` | `account`, `uid`, `email` | `token`, `expiresAt`（毫秒） |
 | POST `/proton/import/api/extension-import` | `account`, `token`, `bundle` | `success`, `account`, `bundleVersion`, `keySaltCount`, `refreshTestRequired` |
+| POST `/proton/import/api/import-key-salts` | `account`, `keySalts` | 手工故障排查专用 KeySalt 导入结果 |
 
 Access 身份由服务端从 Cloudflare Access JWT 注入，不信任扩展传入的身份字段。
 
