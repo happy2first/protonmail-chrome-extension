@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Proton → Personal Mail MCP",
-  "version": "0.2.0",
-  "description": "将当前 Proton Browser Session Bundle 安全导入 Personal Mail MCP。",
+  "version": "0.3.0",
+  "description": "预览并确认后，将当前 Proton Browser Session Bundle 安全导入 Personal Mail MCP。",
   "minimum_chrome_version": "120",
   "permissions": [
     "cookies",
