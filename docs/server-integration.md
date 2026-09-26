@@ -20,6 +20,8 @@
 
 Bundle 不包含 Proton 密码、AccessToken、私钥或页面存储内容。
 
+扩展在上传前先在本地 Popup 中生成并显示完整 Bundle 预览；用户可导出同一份 JSON。只有点击“确认导入”后，扩展才调用 `extension-pair` 和 `extension-import`。取消预览不会创建配对，也不会上传 Bundle。
+
 `REFRESH-<UID>` 必须能覆盖 `/api/auth/refresh`，服务端会解析其 URL-encoded JSON 内容并确认内部 UID 与 Bundle UID 一致。`AUTH-<UID>` 必须覆盖普通 Proton API 路径，且必须存在 `Session-Id`。
 
 ## 接口
