@@ -121,7 +121,7 @@ test('manifest contains minimal permissions and account origin host permission',
   const root=new URL('../extension/',import.meta.url);
   const manifest=JSON.parse(readFileSync(new URL('manifest.json',root),'utf8'));
   assert.equal(manifest.manifest_version,3);
-  assert.equal(manifest.version,'0.2.0');
+  assert.equal(manifest.version,'0.3.0');
   assert.deepEqual(manifest.permissions,['cookies','scripting']);
   assert.deepEqual(manifest.host_permissions,[
     'https://mail.proton.me/*',
@@ -134,4 +134,25 @@ test('manifest contains minimal permissions and account origin host permission',
   for(const file of ['popup.js','core.js','bridge.js']){
     assert.doesNotMatch(readFileSync(new URL(file,root),'utf8'),/localStorage|sessionStorage|chrome\.storage|console\.|indexedDB/);
   }
+});
+
+
+test('popup previews exact import payload before upload and supports local JSON export',()=>{
+  const root=new URL('../extension/',import.meta.url);
+  const html=readFileSync(new URL('popup.html',root),'utf8');
+  const js=readFileSync(new URL('popup.js',root),'utf8');
+  assert.match(html,/id="previewDialog"/);
+  assert.match(html,/id="previewJson"/);
+  assert.match(html,/id="exportBundle"/);
+  assert.match(html,/id="confirmImport"/);
+  assert.match(js,/showPreview\(bundle, account\)/);
+  assert.match(js,/JSON\.stringify\(envelope, null, 2\)/);
+  assert.match(js,/new Blob\(\[json\], \{type:'application\/json'\}\)/);
+  assert.match(js,/a\.download = `proton-session-bundle-/);
+  const previewStart=js.indexOf('async function previewImport()');
+  const confirmStart=js.indexOf('async function confirmImport()');
+  assert.ok(previewStart>=0 && confirmStart>previewStart);
+  assert.doesNotMatch(js.slice(previewStart,confirmStart),/callMcp\('pair'|callMcp\('import'/);
+  assert.match(js.slice(confirmStart),/callMcp\('pair'/);
+  assert.match(js.slice(confirmStart),/callMcp\('import'/);
 });
