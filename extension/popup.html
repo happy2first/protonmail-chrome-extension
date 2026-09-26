@@ -1,11 +1,67 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>连接 Personal Mail MCP</title><link rel="stylesheet" href="popup.css"></head>
-<body><h1>Proton Mail</h1><p class="sub">连接你的 Personal Mail MCP</p>
-<label for="proton">浏览器中的 Proton 会话</label><select id="proton" disabled></select>
-<p id="email">正在检测…</p><dl><dt>AUTH</dt><dd id="auth">待检测</dd><dt>Session-Id</dt><dd id="sessionId">待检测</dd><dt>REFRESH</dt><dd id="refresh">待检测</dd><dt>KeySalt</dt><dd id="salt">待检测</dd></dl>
-<label for="account">导入到 MCP 账号</label><select id="account" disabled></select>
-<button id="login" type="button">打开 MCP 管理页 / 登录 Access</button>
-<button id="detect" type="button">重新检测</button>
-<p class="notice">点击连接会把同一 UID 的结构化 AUTH / REFRESH / Session-Id Cookie 与 KeySalt 组成 Browser Session Bundle v2，发送到 <strong>mail.mcp.happyfirst.top</strong>。KeySalt 通过 account.proton.me 同源请求自动重放获取；扩展不读取密码，也不保存会话副本。</p>
-<button id="connect" type="button" disabled>一键连接 Personal Mail MCP</button>
-<p id="status" role="status" aria-live="polite"></p><script type="module" src="popup.js"></script></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>连接 Personal Mail MCP</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>Proton Mail</h1>
+  <p class="sub">连接到 Personal Mail MCP</p>
+
+  <label for="proton">Proton 会话</label>
+  <select id="proton" disabled></select>
+  <p id="email">正在检测…</p>
+
+  <dl>
+    <dt>AUTH</dt><dd id="auth">待检测</dd>
+    <dt>Session-Id</dt><dd id="sessionId">待检测</dd>
+    <dt>REFRESH</dt><dd id="refresh">待检测</dd>
+    <dt>KeySalt</dt><dd id="salt">待检测</dd>
+  </dl>
+
+  <label for="account">目标 MCP 账号</label>
+  <select id="account" disabled></select>
+
+  <div class="row">
+    <button id="login" type="button">打开管理页</button>
+    <button id="detect" type="button">重新检测</button>
+  </div>
+
+  <p class="notice">扩展不会读取 Proton 密码。点击下方按钮后会先显示本次导入内容，确认后才上传。</p>
+  <button id="connect" class="primary" type="button" disabled>预览并连接</button>
+
+  <p id="status" role="status" aria-live="polite"></p>
+
+  <dialog id="previewDialog">
+    <div class="dialogHead">
+      <h2>确认导入</h2>
+      <button id="closePreview" class="iconButton" type="button" aria-label="关闭">×</button>
+    </div>
+
+    <dl class="previewList">
+      <dt>Proton 邮箱</dt><dd id="previewEmail">—</dd>
+      <dt>目标账号</dt><dd id="previewAccount">—</dd>
+      <dt>UID</dt><dd id="previewUid">—</dd>
+      <dt>Cookie</dt><dd id="previewCookies">—</dd>
+      <dt>KeySalt</dt><dd id="previewSalts">—</dd>
+    </dl>
+
+    <details>
+      <summary>查看完整导入 JSON</summary>
+      <pre id="previewJson"></pre>
+    </details>
+
+    <p class="warning">导出的 JSON 含可用的 Session Cookie 和 KeySalt，请按敏感凭证保管。文件仅用于核对或排障，不建议长期保存。</p>
+
+    <div class="dialogActions">
+      <button id="exportBundle" type="button">导出 JSON</button>
+      <button id="cancelPreview" type="button">取消</button>
+      <button id="confirmImport" class="primary" type="button">确认导入</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
