@@ -200,24 +200,52 @@ async function captureBundle(uid, updateUi = false) {
 
   let salts;
   try {
-    salts = await withAccountTab(uid, tabId => runIn(tabId, readKeySalts, [uid]));
-    if (!salts.ok) {
-      logEvent('KeySalt', '获取失败', {
+    logEvent('KeySalt', '优先使用 Mail 当前会话同源重放', {uid:uidSuffix(uid)});
+    salts = await runIn(selectedTab, readKeySalts, [uid]);
+
+    if (salts.ok) {
+      logEvent('KeySalt', 'Mail 同源获取成功', {
+        uid:uidSuffix(uid),
+        count:salts.keySalts?.length || 0,
+        status:salts.diagnostics?.status || 200,
+        protonCode:salts.diagnostics?.protonCode || 1000,
+        attempt:salts.diagnostics?.attempt || 1
+      });
+    } else {
+      logEvent('KeySalt', 'Mail 同源获取失败，尝试 Account 兼容路径', {
         uid:uidSuffix(uid),
         status:salts.status || 'n/a',
         protonCode:salts.protonCode || 'n/a',
-        stage:salts.stage || 'n/a',
-        path:salts.pathname || 'n/a'
+        stage:salts.stage || 'n/a'
       });
-      throw new Error(salts.error);
+
+      const mailFailure = salts.error || 'Mail 同源 KeySalt 获取失败';
+      try {
+        salts = await withAccountTab(uid, tabId => runIn(tabId, readKeySalts, [uid]));
+      } catch (accountError) {
+        const accountMessage = accountError instanceof Error ? accountError.message : 'Account 兼容路径失败';
+        throw new Error(`KeySalt 获取失败。Mail：${mailFailure}；Account：${accountMessage}`);
+      }
+
+      if (!salts.ok) {
+        logEvent('KeySalt', 'Account 兼容路径获取失败', {
+          uid:uidSuffix(uid),
+          status:salts.status || 'n/a',
+          protonCode:salts.protonCode || 'n/a',
+          stage:salts.stage || 'n/a',
+          path:salts.pathname || 'n/a'
+        });
+        throw new Error(`KeySalt 获取失败。Mail：${mailFailure}；Account：${salts.error}`);
+      }
+
+      logEvent('KeySalt', 'Account 兼容路径获取成功', {
+        uid:uidSuffix(uid),
+        count:salts.keySalts?.length || 0,
+        status:salts.diagnostics?.status || 200,
+        protonCode:salts.diagnostics?.protonCode || 1000,
+        attempt:salts.diagnostics?.attempt || 1
+      });
     }
-    logEvent('KeySalt', '获取成功', {
-      uid:uidSuffix(uid),
-      count:salts.keySalts?.length || 0,
-      status:salts.diagnostics?.status || 200,
-      protonCode:salts.diagnostics?.protonCode || 1000,
-      attempt:salts.diagnostics?.attempt || 1
-    });
   } catch (error) {
     if (updateUi) $('salt').textContent = '获取失败';
     throw error;
