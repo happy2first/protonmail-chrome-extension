@@ -34,6 +34,16 @@
 
   <p id="status" role="status" aria-live="polite"></p>
 
+  <details id="diagnostics">
+    <summary>诊断日志</summary>
+    <pre id="logOutput">暂无日志</pre>
+    <div class="row">
+      <button id="copyLog" type="button">复制日志</button>
+      <button id="clearLog" type="button">清空日志</button>
+    </div>
+    <p class="notice">日志只记录步骤、HTTP 状态、Proton Code、LocalID 和 UID 尾号，不记录 Cookie 值、RefreshToken、KeySalt 或密码。</p>
+  </details>
+
   <dialog id="previewDialog">
     <div class="dialogHead">
       <h2>确认导入</h2>
