@@ -1,26 +1,31 @@
-# 服务端配套协议 v2
+# 服务端配套协议 v3
 
 仓库：`happy2first/personal-mail-mcp`。服务端新增 `src/proton/extension-policy.js`、`src/proton/extension-session.js`；`src/entry.js` 加载扩展处理器；`import-page.js` 提供 CSRF meta、配对与导入路由。管理页仅保留当前高级手工故障排查流程：普通 Session Cookie + 专用 REFRESH Cookie + KeySalt JSON；旧 Session JSON / 旧 REFRESH-* 兼容导入及其通用 `/api/import` 入口已移除。
 
 现有 `/proton/import` 仍必须通过 Cloudflare Access。扩展在该页面的隔离上下文读取 `meta[name=proton-extension-csrf]`，沿用 HttpOnly 双提交 CSRF Cookie。普通跨站请求不放行；不为扩展添加 Access bypass。
 
-## Browser Session Bundle v2
+## Browser Session Bundle v3
 
 扩展上传的 `bundle`：
 
-- `version: 2`
+- `version: 3`
 - `source: "proton-browser-session"`
 - `uid`、`capturedAt`、`email`
 - `session.cookies`：结构化 Cookie Jar，保留 Domain、Path、HostOnly、HttpOnly、Secure、SameSite、Expires 等浏览器属性
 - 必须包含同一 UID 的 `AUTH-<UID>`、`REFRESH-<UID>` 和 `Session-Id`
 - `user:{id,keyIds,passwordMode?}`
 - `addresses:[{id,email}]`
-- `keySalts:[{id,keySalt}]`
+- `keyPassword`：首选，来自当前 Proton Mail 持久会话解密出的 Proton 派生密钥；不是用户原始登录密码
+- `keySalts:[{id,keySalt}]`：仅作为兼容 fallback
 - `client:{mailAppVersion,accountAppVersion,locale}` 仅用于诊断，不作为秘密凭证或信任依据
 
-Bundle 不包含 Proton 密码、AccessToken、私钥或页面存储内容。
+Bundle 不包含 Proton 原始登录密码、AccessToken 或私钥。正常路径会包含敏感的派生 `keyPassword`，仅在确认导入时从扩展内存上传；预览和导出 JSON 会主动排除该字段。
 
-扩展在上传前先在本地 Popup 中生成并显示完整 Bundle 预览；用户可导出同一份 JSON。只有点击“确认导入”后，扩展才调用 `extension-pair` 和 `extension-import`。取消预览不会创建配对，也不会上传 Bundle。
+扩展在上传前先在本地 Popup 中显示脱敏预览。用户可导出同一份脱敏 JSON，但其中不包含 `keyPassword`。只有点击“确认导入”后，扩展才把内存中的完整 Bundle 通过 `extension-pair` / `extension-import` 上传；取消预览不会创建配对，也不会上传 Bundle。
+
+### 浏览器解密材料
+
+正常路径不再要求扩展调用 `/core/v4/keys/salts`。扩展读取当前 Mail 页面 `ps-<LocalID>` 中的加密持久会话 blob，并使用当前 Cookie Session 调用 `GET /api/auth/v4/sessions/local/key` 获取 `ClientKey`。随后只在扩展内存中按 Proton WebClients 的持久会话格式执行 AES-GCM 解密，提取其中的派生 `keyPassword`。原始 blob 和 ClientKey 不上传；`keyPassword` 不写日志、不展示、不导出。
 
 `REFRESH-<UID>` 必须能覆盖 `/api/auth/refresh`，服务端会解析其 URL-encoded JSON 内容并确认内部 UID 与 Bundle UID 一致。`AUTH-<UID>` 必须覆盖普通 Proton API 路径，且必须存在 `Session-Id`。
 
@@ -32,12 +37,12 @@ Bundle 不包含 Proton 密码、AccessToken、私钥或页面存储内容。
 | --- | --- | --- |
 | GET `/proton/import/api/accounts` | 无 | 脱敏账号列表 |
 | POST `/proton/import/api/extension-pair` | `account`, `uid`, `email` | `token`, `expiresAt`（毫秒） |
-| POST `/proton/import/api/extension-import` | `account`, `token`, `bundle` | `success`, `account`, `bundleVersion`, `keySaltCount`, `refreshTestRequired` |
+| POST `/proton/import/api/extension-import` | `account`, `token`, `bundle` | `success`, `account`, `bundleVersion`, `keyMaterialSource`, `decryptionVerified`, `refreshTestRequired` |
 | POST `/proton/import/api/import-key-salts` | `account`, `keySalts` | 手工故障排查专用 KeySalt 导入结果 |
 
 Access 身份由服务端从 Cloudflare Access JWT 注入，不信任扩展传入的身份字段。
 
-配对摘要存入同一账号 Durable Object 的 `proton:extensionPair:v2`，使用现有 `PROTON_SESSION_KEY` 加密。记录仅保存 token SHA-256、UID、邮箱、Access 身份与过期时间；原始 token 不落盘。配对有效期 5 分钟；导入一旦消费 token，无论后续 Bundle 验证成功或失败，都需要重新配对。
+配对摘要存入同一账号 Durable Object 的 `proton:extensionPair:v3`，使用现有 `PROTON_SESSION_KEY` 加密。记录仅保存 token SHA-256、UID、邮箱、Access 身份与过期时间；原始 token 不落盘。配对有效期 5 分钟；导入一旦消费 token，无论后续 Bundle 验证成功或失败，都需要重新配对。
 
 ## 服务端验证与持久化
 
@@ -47,12 +52,12 @@ Access 身份由服务端从 Cloudflare Access JWT 注入，不信任扩展传�
 2. 校验同一 UID 的 AUTH / REFRESH / Session-Id。
 3. 使用 Bundle Cookie Session 调用 `/core/v4/addresses` 与 `/core/v4/users`。
 4. 校验配置邮箱、Bundle 邮箱、User ID。
-5. 校验 KeySalt ID 至少匹配一个当前 Active User Key。
+5. 若 Bundle 含浏览器派生 `keyPassword`，用它实际解锁当前 Proton 用户/地址私钥；只有解锁成功才接受导入。若没有 `keyPassword`，才校验 KeySalt ID 至少匹配当前 Active User Key。
 6. 仅在全部验证通过后替换所选账号的持久 Session。
-7. 使用现有 AES-GCM account-bound AAD 保存 `proton:session:v2`、`proton:cookies:v1` 与 KeySalt。
+7. 使用现有 `PROTON_SESSION_KEY` + account-bound AAD 加密保存 `proton:session:v2` 和 `proton:cookies:v1`；`keyPassword` 随 auth Session 一起加密，不单独明文落盘。
 8. 清除事件游标与旧 human-verification 状态。
 
-导入阶段不主动 refresh，避免扩展刚复制 Browser Session 时立即与浏览器竞争同一 REFRESH rotation。导入后管理页应显示 AUTH / Session-Id / REFRESH / KeySalt 状态；用户可显式点击“测试自动续期”，该请求会真实调用 `POST /auth/refresh` 并保存 Proton 下发的最新 Cookie。
+导入阶段不主动 refresh，避免扩展刚复制 Browser Session 时立即与浏览器竞争同一 REFRESH rotation。导入后管理页应显示 AUTH / Session-Id / REFRESH / 解密材料状态；用户可显式点击“测试自动续期”，该请求会真实调用 `POST /auth/refresh` 并保存 Proton 下发的最新 Cookie。
 
 ## x-pm-* Header
 

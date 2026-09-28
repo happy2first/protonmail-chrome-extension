@@ -18,7 +18,7 @@
     <dt>AUTH</dt><dd id="auth">待检测</dd>
     <dt>Session-Id</dt><dd id="sessionId">待检测</dd>
     <dt>REFRESH</dt><dd id="refresh">待检测</dd>
-    <dt>KeySalt</dt><dd id="salt">待检测</dd>
+    <dt>解密材料</dt><dd id="salt">待检测</dd>
   </dl>
 
   <label for="account">目标 MCP 账号</label>
@@ -29,7 +29,7 @@
     <button id="detect" type="button">重新检测</button>
   </div>
 
-  <p class="notice">扩展不会读取 Proton 密码。点击下方按钮后会先显示本次导入内容，确认后才上传。</p>
+  <p class="notice">扩展不会读取 Proton 登录密码。它会从当前已登录浏览器会话恢复 Proton 已派生的解密密钥；确认后才上传。</p>
   <button id="connect" class="primary" type="button" disabled>预览并连接</button>
 
   <p id="status" role="status" aria-live="polite"></p>
@@ -41,7 +41,7 @@
       <button id="copyLog" type="button">复制日志</button>
       <button id="clearLog" type="button">清空日志</button>
     </div>
-    <p class="notice">日志只记录步骤、HTTP 状态、Proton Code、LocalID 和 UID 尾号，不记录 Cookie 值、RefreshToken、KeySalt 或密码。</p>
+    <p class="notice">日志只记录步骤、HTTP 状态、Proton Code、LocalID 和 UID 尾号，不记录 Cookie 值、RefreshToken、KeySalt、keyPassword 或登录密码。</p>
   </details>
 
   <dialog id="previewDialog">
@@ -55,7 +55,7 @@
       <dt>目标账号</dt><dd id="previewAccount">—</dd>
       <dt>UID</dt><dd id="previewUid">—</dd>
       <dt>Cookie</dt><dd id="previewCookies">—</dd>
-      <dt>KeySalt</dt><dd id="previewSalts">—</dd>
+      <dt>解密材料</dt><dd id="previewSalts">—</dd>
     </dl>
 
     <details>
@@ -63,7 +63,7 @@
       <pre id="previewJson"></pre>
     </details>
 
-    <p class="warning">导出的 JSON 含可用的 Session Cookie 和 KeySalt，请按敏感凭证保管。文件仅用于核对或排障，不建议长期保存。</p>
+    <p class="warning">导出的 JSON 含可用的 Session Cookie，请按敏感凭证保管；出于安全考虑，浏览器恢复出的 keyPassword 不会显示或写入导出文件。</p>
 
     <div class="dialogActions">
       <button id="exportBundle" type="button">导出 JSON</button>
