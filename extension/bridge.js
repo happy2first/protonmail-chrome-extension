@@ -56,6 +56,28 @@ export function readPersistedSessionUid(localID) {
   }
 }
 
+export function readPersistedSessionIndex() {
+  try {
+    const sessions = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      const match = /^ps-(\d+)$/.exec(String(key || ''));
+      if (!match) continue;
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch { continue; }
+      const uid = typeof parsed?.UID === 'string' ? parsed.UID.trim() : '';
+      if (!uid) continue;
+      sessions.push({localID:Number(match[1]),uid});
+    }
+    sessions.sort((a,b)=>a.localID-b.localID);
+    return {ok:true,sessions};
+  } catch (e) {
+    return {ok:false,error:e instanceof Error ? e.message : '读取持久会话索引失败'};
+  }
+}
+
 export async function readLocalSessions(uid) {
   if (location.origin !== 'https://mail.proton.me') {
     return {ok:false, error:'本地会话映射需要 mail.proton.me 同源页面'};
