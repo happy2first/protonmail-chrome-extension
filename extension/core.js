@@ -77,13 +77,21 @@ export function sessionCandidates(rows, now = Date.now()) {
 }
 
 export function bundleFor(uid, cookies, result) {
-  if (!result?.ok || !result.user?.id || !result.addresses?.length || !result.keySalts?.length) throw new Error('账号或 KeySalt 未就绪');
+  if (!result?.ok || !result.user?.id || !result.addresses?.length) throw new Error('账号信息未就绪');
   const state = sessionState(cookies, uid);
   if (!state.ready) throw new Error('AUTH / REFRESH / Session-Id 材料不完整');
-  const keyIds = new Set(result.user.keyIds || []);
-  if (!result.keySalts.some(k => k?.id && k?.keySalt && keyIds.has(k.id))) throw new Error('KeySalt 与用户密钥不匹配');
+
+  const keyPassword = typeof result.keyPassword === 'string' ? result.keyPassword : '';
+  const keySalts = Array.isArray(result.keySalts) ? result.keySalts : [];
+  if (!keyPassword && !keySalts.length) throw new Error('Proton 解密材料未就绪');
+
+  if (!keyPassword) {
+    const keyIds = new Set(result.user.keyIds || []);
+    if (!keySalts.some(k => k?.id && k?.keySalt && keyIds.has(k.id))) throw new Error('KeySalt 与用户密钥不匹配');
+  }
+
   const bundle = {
-    version:2,
+    version:3,
     source:'proton-browser-session',
     uid,
     capturedAt:Date.now(),
@@ -91,7 +99,9 @@ export function bundleFor(uid, cookies, result) {
     session:{cookies},
     user:result.user,
     addresses:result.addresses,
-    keySalts:result.keySalts,
+    ...(keyPassword ? {keyPassword} : {}),
+    ...(keySalts.length ? {keySalts} : {}),
+    keyMaterialSource:result.keyMaterialSource || (keyPassword ? 'browser-key-password' : 'key-salt'),
     client:result.client || null
   };
   if (new TextEncoder().encode(JSON.stringify(bundle)).length > 110 * 1024) throw new Error('Session Bundle 超过大小限制');
