@@ -19,7 +19,7 @@
 4. 选择仓库内 **extension** 文件夹（里面直接有 `manifest.json`），不要选仓库根目录。
 5. 使用普通窗口登录 `https://mail.proton.me`。
 6. 打开 `https://mail.mcp.happyfirst.top/proton/import` 并完成 Cloudflare Access 登录。部署过服务端更新后刷新此页。保持页面打开。
-7. 切回 Proton 标签页，点击扩展图标。扩展会从 Cookie Jar 识别 UID，读取同一 UID 的 `AUTH-*`、`REFRESH-*`、`Session-Id` 与必要辅助 Cookie，并请求 users / addresses。
+7. 切回 Proton 标签页，点击扩展图标。扩展会按实际 Proton API URL 读取会随请求发送的 Cookie，识别可用的 `AUTH-*`、`REFRESH-*`、`Session-Id` 与必要辅助 Cookie；若存在多个会话，会按 `AUTH-*` 的到期时间排序并默认选择最新会话，不再要求先手工判断 UID。
 8. 扩展会自动打开一个后台 `account.proton.me/mail` 标签页，在该同源环境重放 `GET /api/core/v4/keys/salts`，取得 KeySalt 后自动关闭该临时标签页。多个会话需要先选择，再核对显示的邮箱地址。
 9. 选择对应 MCP 账号，点击“预览并连接”。扩展会先显示本次导入的 Proton 邮箱、目标 MCP 账号、UID、Cookie 名称、KeySalt 数量和完整 JSON；此时尚未发起配对或上传 Bundle。
 10. 如需留档或排障，可在确认窗口点击“导出 JSON”保存本次完整导入内容到本地。该文件包含可用 Session Cookie 和 KeySalt，应按敏感凭证保管。
@@ -30,7 +30,7 @@
 
 ## 实现范围与安全边界
 
-- `chrome.cookies.getAll({domain:'proton.me',storeId})` 读取正确 Cookie Store，包含受 Path 限制的 HttpOnly Cookie；不会使用 `document.cookie`。
+- 扩展分别按 `https://mail.proton.me/api/core/v4/addresses` 和 `https://mail.proton.me/api/auth/refresh` 查询 Cookie，让 Chrome 直接返回实际会随这两个请求发送的 HttpOnly Cookie，避免自行猜测 Domain/Path；不会使用 `document.cookie`。
 - 保留 Domain、Path、HttpOnly、Secure、SameSite、HostOnly、Session、Expires（`expirationDate` 为秒，`expiresAt` 为毫秒）。会话 Cookie 的到期时间为 null。
 - Bundle v2 强制要求同一 UID 的 `AUTH-<UID>`、`REFRESH-<UID>` 与 `Session-Id`，并保留适用于 mail.proton.me 的辅助 Cookie；排除其他 UID、其他域名与过期 Cookie。第一版拒绝隐身和分区 Cookie，避免错误重放。
 - mail API 请求在 `mail.proton.me` 标签页的 **ISOLATED world** 中执行；KeySalt 请求在 `account.proton.me` 同源标签页的 **ISOLATED world** 中执行。只读取用户 ID、密钥 ID、地址和 KeySalt；不访问网页存储、密码框、页面 JS 内存，不导出加密/解密私钥。
