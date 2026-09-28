@@ -121,7 +121,7 @@ test('manifest contains minimal permissions and account origin host permission',
   const root=new URL('../extension/',import.meta.url);
   const manifest=JSON.parse(readFileSync(new URL('manifest.json',root),'utf8'));
   assert.equal(manifest.manifest_version,3);
-  assert.equal(manifest.version,'0.3.6');
+  assert.equal(manifest.version,'0.3.7');
   assert.deepEqual(manifest.permissions,['cookies','scripting']);
   assert.deepEqual(manifest.host_permissions,[
     'https://proton.me/*',
