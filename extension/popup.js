@@ -6,6 +6,30 @@ let busy = false;
 let selectedTab = null;
 let storeId = null;
 let pendingImport = null;
+let diagnosticLog = [];
+
+function uidSuffix(uid) {
+  const value = String(uid || '');
+  return value ? '…' + value.slice(-6) : '—';
+}
+
+function localIdFromUrl(url) {
+  try {
+    return new URL(url).pathname.match(/^\/u\/(\d+)(?:\/|$)/)?.[1] || null;
+  } catch {
+    return null;
+  }
+}
+
+function logEvent(scope, message, details = null) {
+  const time = new Date().toLocaleTimeString();
+  const suffix = details && Object.keys(details).length
+    ? ' ' + Object.entries(details).map(([k,v]) => `${k}=${String(v)}`).join(' ')
+    : '';
+  diagnosticLog.push(`[${time}] ${scope}: ${message}${suffix}`);
+  diagnosticLog = diagnosticLog.slice(-80);
+  if ($('logOutput')) $('logOutput').textContent = diagnosticLog.join('\n') || '暂无日志';
+}
 
 const runIn = async (tabId, func, args) => {
   const results = await chrome.scripting.executeScript({target:{tabId,frameIds:[0]},world:'ISOLATED',func,args});
@@ -25,18 +49,29 @@ async function waitForTab(tabId, timeoutMs = 15000) {
   throw new Error('account.proton.me 页面加载超时');
 }
 
-async function withAccountTab(fn) {
+async function withAccountTab(localId, fn) {
+  const expectedPrefix = localId ? `/u/${localId}/` : null;
+  const targetUrl = localId ? `${ACCOUNT}/u/${localId}/mail` : ACCOUNT + '/mail';
   const tabs = await chrome.tabs.query({url:ACCOUNT + '/*'});
-  let tab = tabs.find(t => !t.incognito);
+  let tab = tabs.find(t => !t.incognito && (!expectedPrefix || new URL(t.url).pathname.startsWith(expectedPrefix)));
   let created = false;
   if (!tab) {
-    tab = await chrome.tabs.create({url:ACCOUNT + '/mail', active:false});
+    logEvent('KeySalt', '打开 Account 同会话页面', {localID:localId || 'none'});
+    tab = await chrome.tabs.create({url:targetUrl, active:false});
     created = true;
+  } else {
+    logEvent('KeySalt', '复用 Account 同会话页面', {localID:localId || 'none'});
   }
   try {
     await waitForTab(tab.id);
+    await sleep(900);
     const current = await chrome.tabs.get(tab.id);
     if (!current.url || new URL(current.url).origin !== ACCOUNT) throw new Error('account.proton.me 未保持登录状态');
+    const actualLocalId = localIdFromUrl(current.url);
+    logEvent('KeySalt', 'Account 页面已就绪', {expectedLocalID:localId || 'none',actualLocalID:actualLocalId || 'none'});
+    if (localId && actualLocalId !== localId) {
+      throw new Error(`Account LocalID 不匹配：期望 ${localId}，实际 ${actualLocalId || '无'}`);
+    }
     return await fn(tab.id);
   } finally {
     if (created) {
@@ -86,13 +121,41 @@ async function captureBundle(uid, updateUi = false) {
   if (!state.sessionId) throw new Error('未找到 Proton Session-Id Cookie');
 
   const cookies = selectCookies(rows, uid);
+  const mailTab = await chrome.tabs.get(selectedTab);
+  const localId = localIdFromUrl(mailTab.url);
+  logEvent('Session', 'Cookie 材料就绪', {
+    uid:uidSuffix(uid),
+    localID:localId || 'none',
+    cookieCount:cookies.length
+  });
+
   const mail = await runIn(selectedTab, readProton, [uid]);
-  if (!mail.ok) throw new Error(mail.error);
+  if (!mail.ok) {
+    logEvent('Mail API', '读取用户信息失败', {uid:uidSuffix(uid),error:mail.error});
+    throw new Error(mail.error);
+  }
+  logEvent('Mail API', 'users/addresses 成功', {uid:uidSuffix(uid),addressCount:mail.addresses?.length || 0});
 
   let salts;
   try {
-    salts = await withAccountTab(tabId => runIn(tabId, readKeySalts, [uid]));
-    if (!salts.ok) throw new Error(salts.error);
+    salts = await withAccountTab(localId, tabId => runIn(tabId, readKeySalts, [uid]));
+    if (!salts.ok) {
+      logEvent('KeySalt', '获取失败', {
+        uid:uidSuffix(uid),
+        status:salts.status || 'n/a',
+        protonCode:salts.protonCode || 'n/a',
+        stage:salts.stage || 'n/a',
+        path:salts.pathname || 'n/a'
+      });
+      throw new Error(salts.error);
+    }
+    logEvent('KeySalt', '获取成功', {
+      uid:uidSuffix(uid),
+      count:salts.keySalts?.length || 0,
+      status:salts.diagnostics?.status || 200,
+      protonCode:salts.diagnostics?.protonCode || 1000,
+      attempt:salts.diagnostics?.attempt || 1
+    });
   } catch (error) {
     if (updateUi) $('salt').textContent = '获取失败';
     throw error;
@@ -209,11 +272,19 @@ async function detect() {
   if (tab.incognito) throw new Error('当前版本请使用普通浏览器窗口');
 
   selectedTab = tab.id;
+  const mailLocalId = localIdFromUrl(tab.url);
+  logEvent('检测', '找到 Proton Mail 标签页', {localID:mailLocalId || 'none',version:chrome.runtime.getManifest().version});
   const stores = await chrome.cookies.getAllCookieStores();
   storeId = stores.find(s => s.tabIds.includes(tab.id))?.id;
   if (!storeId) throw new Error('无法确定 Proton Cookie Store');
 
   const rows = await currentCookies();
+  logEvent('Cookie', '读取完成', {
+    total:rows.length,
+    sessionId:rows.some(x => x.name === 'Session-Id') ? 'yes' : 'no',
+    auth:rows.filter(x => x.name.startsWith('AUTH-')).length,
+    refresh:rows.filter(x => x.name.startsWith('REFRESH-')).length
+  });
   const candidates = sessionCandidates(rows);
 
   $('proton').replaceChildren(...candidates.map((item,i) =>
@@ -223,6 +294,7 @@ async function detect() {
   if (!candidates.length) throw new Error('没有找到同时包含 AUTH 和 REFRESH 的 Proton Session');
 
   $('proton').value = candidates[0].uid;
+  logEvent('检测', '默认选择最新会话', {uid:uidSuffix(candidates[0].uid),candidates:candidates.length});
   $('status').textContent = candidates.length > 1
     ? `检测到 ${candidates.length} 个会话，已默认选择最新会话。`
     : '已找到 Proton 会话，正在检测。';
@@ -272,7 +344,10 @@ async function act(fn) {
   try {
     await fn();
   } catch (e) {
-    $('status').textContent = e instanceof Error ? e.message : '操作失败，请重新检测';
+    const message = e instanceof Error ? e.message : '操作失败，请重新检测';
+    logEvent('错误', message);
+    $('status').textContent = message;
+    if ($('diagnostics')) $('diagnostics').open = true;
   } finally {
     busy = false;
     $('detect').disabled = false;
@@ -302,5 +377,18 @@ $('previewDialog').addEventListener('cancel', event => {
   event.preventDefault();
   clearPreview();
 });
+$('copyLog').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(diagnosticLog.join('\n') || '暂无日志');
+    $('status').textContent = '诊断日志已复制。';
+  } catch {
+    $('status').textContent = '复制日志失败，请直接在日志框中查看。';
+  }
+};
+$('clearLog').onclick = () => {
+  diagnosticLog = [];
+  $('logOutput').textContent = '暂无日志';
+};
 
+logEvent('扩展', '启动', {version:chrome.runtime.getManifest().version});
 void act(detect);
