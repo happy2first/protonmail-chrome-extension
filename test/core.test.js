@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {selectCookies,sessionState,sessionCandidates,refreshAvailable,bundleFor} from '../extension/core.js';
-import {readProton,readPersistedSessionUid,readLocalSessions,readKeySalts,mcpRequest} from '../extension/bridge.js';
+import {readProton,readPersistedSessionUid,readPersistedSessionIndex,readLocalSessions,readKeySalts,mcpRequest} from '../extension/bridge.js';
 
 const cookie = (name='AUTH-one',extra={}) => ({
   name,
@@ -121,7 +121,7 @@ test('manifest contains minimal permissions and account origin host permission',
   const root=new URL('../extension/',import.meta.url);
   const manifest=JSON.parse(readFileSync(new URL('manifest.json',root),'utf8'));
   assert.equal(manifest.manifest_version,3);
-  assert.equal(manifest.version,'0.3.5');
+  assert.equal(manifest.version,'0.3.6');
   assert.deepEqual(manifest.permissions,['cookies','scripting']);
   assert.deepEqual(manifest.host_permissions,[
     'https://proton.me/*',
@@ -195,17 +195,17 @@ test('manifest includes parent proton.me permission for Session-Id domain cookie
 });
 
 
-test('popup preserves Proton LocalID for account KeySalt replay and exposes sanitized logs',()=>{
+test('popup resolves Account-side LocalID by UID and exposes sanitized logs',()=>{
   const root=new URL('../extension/',import.meta.url);
   const html=readFileSync(new URL('popup.html',root),'utf8');
   const js=readFileSync(new URL('popup.js',root),'utf8');
   assert.match(html,/id="diagnostics"/);
   assert.match(html,/id="logOutput"/);
   assert.match(html,/id="copyLog"/);
-  assert.match(js,/localIdFromUrl/);
-  assert.match(js,/\`\$\{ACCOUNT\}\/u\/\$\{localId\}\/mail\`/);
-  assert.match(js,/expectedLocalID/);
-  assert.match(js,/actualLocalID/);
+  assert.match(js,/readPersistedSessionIndex/);
+  assert.match(js,/index\.sessions\.find\(item => item\.uid === expectedUid\)/);
+  assert.match(js,/Account UID 匹配/);
+  assert.match(js,/AUTH-\$\{expectedUid\}/);
   assert.match(js,/protonCode/);
   assert.match(js,/diagnosticLog/);
   assert.doesNotMatch(js,/cookie\.value|RefreshToken.*logEvent|keySalt.*logEvent/i);
@@ -285,13 +285,38 @@ test('persisted LocalID mapping returns only UID and does not expose Proton sess
   globalThis.localStorage=previous;
 });
 
-test('popup prefers persisted ps-LocalID UID and verifies account UID before KeySalt replay',()=>{
+test('popup uses Mail ps-LocalID UID then finds a possibly different Account LocalID for that UID',()=>{
   const root=new URL('../extension/',import.meta.url);
   const js=readFileSync(new URL('popup.js',root),'utf8');
-  assert.match(js,/readPersistedSessionUid/);
   assert.match(js,/ps-LocalID 精确匹配 UID/);
   assert.match(js,/selectionMode = 'persisted-localid'/);
-  assert.match(js,/Account 持久会话 UID/);
-  assert.match(js,/persisted\.uid !== expectedUid/);
-  assert.match(js,/withAccountTab\(localId, uid,/);
+  assert.match(js,/withAccountTab\(uid,/);
+  assert.match(js,/accountLocalID:match\.localID/);
+  assert.match(js,/\$\{ACCOUNT\}\/u\/\$\{match\.localID\}\/mail/);
+  assert.doesNotMatch(js,/withAccountTab\(localId, uid,/);
+});
+
+
+test('persisted session index enumerates only ps-* LocalID and UID metadata',()=>{
+  const previous=globalThis.localStorage;
+  const data={
+    'ps-6':JSON.stringify({UID:'uid-mail',blob:'SECRET-A'}),
+    'ps-2':JSON.stringify({UID:'uid-account',blob:'SECRET-B'}),
+    'unrelated':'ignore'
+  };
+  globalThis.localStorage={
+    length:Object.keys(data).length,
+    key:i=>Object.keys(data)[i] ?? null,
+    getItem:key=>data[key] ?? null
+  };
+  const result=readPersistedSessionIndex();
+  assert.deepEqual(result,{
+    ok:true,
+    sessions:[
+      {localID:2,uid:'uid-account'},
+      {localID:6,uid:'uid-mail'}
+    ]
+  });
+  assert.equal(JSON.stringify(result).includes('SECRET-'),false);
+  globalThis.localStorage=previous;
 });
