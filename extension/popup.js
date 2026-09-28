@@ -1,5 +1,5 @@
 import {PROTON, ACCOUNT, ADMIN, selectCookies, sessionState, sessionCandidates, bundleFor} from './core.js';
-import {readProton, readKeySalts, mcpRequest} from './bridge.js';
+import {readProton, readLocalSessions, readKeySalts, mcpRequest} from './bridge.js';
 
 const $ = id => document.getElementById(id);
 let busy = false;
@@ -286,18 +286,59 @@ async function detect() {
     refresh:rows.filter(x => x.name.startsWith('REFRESH-')).length
   });
   const candidates = sessionCandidates(rows);
-
-  $('proton').replaceChildren(...candidates.map((item,i) =>
-    new Option(`${i===0?'最新会话':'历史会话 '+(i+1)} · UID …${item.uid.slice(-6)}`,item.uid)
-  ));
-  $('proton').disabled = candidates.length === 0;
   if (!candidates.length) throw new Error('没有找到同时包含 AUTH 和 REFRESH 的 Proton Session');
 
-  $('proton').value = candidates[0].uid;
-  logEvent('检测', '默认选择最新会话', {uid:uidSuffix(candidates[0].uid),candidates:candidates.length});
-  $('status').textContent = candidates.length > 1
-    ? `检测到 ${candidates.length} 个会话，已默认选择最新会话。`
-    : '已找到 Proton 会话，正在检测。';
+  let selectedUid = candidates[0].uid;
+  let selectionMode = 'latest-fallback';
+  if (mailLocalId !== null) {
+    const mapping = await runIn(selectedTab, readLocalSessions, [candidates[0].uid]);
+    if (mapping.ok) {
+      const exact = mapping.sessions.find(item => String(item.localID) === String(mailLocalId));
+      if (exact && candidates.some(item => item.uid === exact.uid)) {
+        selectedUid = exact.uid;
+        selectionMode = 'localid';
+        logEvent('会话映射', 'LocalID 精确匹配 UID', {
+          localID:mailLocalId,
+          uid:uidSuffix(selectedUid),
+          sessions:mapping.sessions.length
+        });
+      } else {
+        logEvent('会话映射', '未找到可用的 LocalID 对应 UID，回退最新会话', {
+          localID:mailLocalId,
+          remoteSessions:mapping.sessions.length
+        });
+      }
+    } else {
+      logEvent('会话映射', '读取失败，回退最新会话', {
+        localID:mailLocalId,
+        status:mapping.status || 'n/a',
+        protonCode:mapping.protonCode || 'n/a'
+      });
+    }
+  }
+
+  const ordered = [...candidates].sort((a,b) => {
+    if (a.uid === selectedUid) return -1;
+    if (b.uid === selectedUid) return 1;
+    return b.expires-a.expires;
+  });
+  $('proton').replaceChildren(...ordered.map((item,i) =>
+    new Option(`${item.uid===selectedUid
+      ? (selectionMode==='localid'?'当前页面会话':'最新会话')
+      : '其他会话 '+(i+1)} · UID …${item.uid.slice(-6)}`,item.uid)
+  ));
+  $('proton').disabled = false;
+  $('proton').value = selectedUid;
+  logEvent('检测', selectionMode==='localid'?'默认选择当前页面会话':'默认选择最新会话', {
+    uid:uidSuffix(selectedUid),
+    candidates:candidates.length,
+    localID:mailLocalId || 'none'
+  });
+  $('status').textContent = selectionMode === 'localid'
+    ? `已按 LocalID ${mailLocalId} 选择当前页面会话。`
+    : (candidates.length > 1
+      ? `检测到 ${candidates.length} 个会话，LocalID 映射不可用，已回退最新会话。`
+      : '已找到 Proton 会话，正在检测。');
   await inspect();
 }
 
@@ -359,6 +400,8 @@ async function act(fn) {
     $('cancelPreview').disabled = false;
     $('exportBundle').disabled = !pendingImport;
     $('confirmImport').disabled = !pendingImport;
+    $('copyLog').disabled = false;
+    $('clearLog').disabled = false;
   }
 }
 
