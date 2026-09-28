@@ -121,7 +121,7 @@ test('manifest contains minimal permissions and account origin host permission',
   const root=new URL('../extension/',import.meta.url);
   const manifest=JSON.parse(readFileSync(new URL('manifest.json',root),'utf8'));
   assert.equal(manifest.manifest_version,3);
-  assert.equal(manifest.version,'0.3.2');
+  assert.equal(manifest.version,'0.3.3');
   assert.deepEqual(manifest.permissions,['cookies','scripting']);
   assert.deepEqual(manifest.host_permissions,[
     'https://proton.me/*',
@@ -189,4 +189,41 @@ test('manifest includes parent proton.me permission for Session-Id domain cookie
   const root=new URL('../extension/',import.meta.url);
   const manifest=JSON.parse(readFileSync(new URL('manifest.json',root),'utf8'));
   assert.ok(manifest.host_permissions.includes('https://proton.me/*'));
+});
+
+
+test('popup preserves Proton LocalID for account KeySalt replay and exposes sanitized logs',()=>{
+  const root=new URL('../extension/',import.meta.url);
+  const html=readFileSync(new URL('popup.html',root),'utf8');
+  const js=readFileSync(new URL('popup.js',root),'utf8');
+  assert.match(html,/id="diagnostics"/);
+  assert.match(html,/id="logOutput"/);
+  assert.match(html,/id="copyLog"/);
+  assert.match(js,/localIdFromUrl/);
+  assert.match(js,/\`\$\{ACCOUNT\}\/u\/\$\{localId\}\/mail\`/);
+  assert.match(js,/expectedLocalID/);
+  assert.match(js,/actualLocalID/);
+  assert.match(js,/protonCode/);
+  assert.match(js,/diagnosticLog/);
+  assert.doesNotMatch(js,/cookie\.value|RefreshToken.*logEvent|keySalt.*logEvent/i);
+});
+
+test('KeySalt bridge returns structured HTTP diagnostics without secrets',async()=>{
+  globalThis.location={origin:'https://account.proton.me',pathname:'/u/4/mail'};
+  let attempts=0;
+  globalThis.fetch=async()=>{
+    attempts++;
+    return {
+      ok:false,
+      status:401,
+      json:async()=>({Code:10013,Error:'Invalid session'})
+    };
+  };
+  const result=await readKeySalts('uid-demo');
+  assert.equal(result.ok,false);
+  assert.equal(result.status,401);
+  assert.equal(result.protonCode,10013);
+  assert.equal(result.pathname,'/u/4/mail');
+  assert.equal(attempts,3);
+  assert.equal(JSON.stringify(result).includes('uid-demo'),false);
 });
