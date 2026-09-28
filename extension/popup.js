@@ -73,20 +73,30 @@ async function currentCookies() {
 }
 
 async function captureBundle(uid, updateUi = false) {
-  const cookies = selectCookies(await currentCookies(), uid);
-  const state = sessionState(cookies, uid);
+  const rows = await currentCookies();
+  const state = sessionState(rows, uid);
   if (updateUi) {
     $('auth').textContent = state.auth ? '已获取' : '缺失';
     $('sessionId').textContent = state.sessionId ? '已获取' : '缺失';
     $('refresh').textContent = state.refresh ? '已获取' : '缺失';
-    $('salt').textContent = '获取中…';
+    $('salt').textContent = state.ready ? '获取中…' : '待检测';
   }
+  if (!state.auth) throw new Error('未找到当前会话的 AUTH Cookie');
+  if (!state.refresh) throw new Error('未找到当前会话的 REFRESH Cookie');
+  if (!state.sessionId) throw new Error('未找到 Proton Session-Id Cookie');
 
+  const cookies = selectCookies(rows, uid);
   const mail = await runIn(selectedTab, readProton, [uid]);
   if (!mail.ok) throw new Error(mail.error);
 
-  const salts = await withAccountTab(tabId => runIn(tabId, readKeySalts, [uid]));
-  if (!salts.ok) throw new Error(salts.error);
+  let salts;
+  try {
+    salts = await withAccountTab(tabId => runIn(tabId, readKeySalts, [uid]));
+    if (!salts.ok) throw new Error(salts.error);
+  } catch (error) {
+    if (updateUi) $('salt').textContent = '获取失败';
+    throw error;
+  }
 
   const result = {
     ok:true,
