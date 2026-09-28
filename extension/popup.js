@@ -214,23 +214,18 @@ async function detect() {
   if (!storeId) throw new Error('无法确定 Proton Cookie Store');
 
   const rows = await currentCookies();
-  const uids = [...new Set(rows.filter(c =>
-    c.name.startsWith('AUTH-') &&
-    c.value &&
-    (c.expirationDate === undefined || c.expirationDate * 1000 > Date.now())
-  ).map(c => c.name.slice(5)))];
+  const candidates = sessionCandidates(rows);
 
-  $('proton').replaceChildren(...uids.map((uid,i) => new Option(`会话 ${i+1} · UID …${uid.slice(-6)}`,uid)));
-  $('proton').disabled = uids.length === 0;
-  if (!uids.length) throw new Error('没有已登录的 Proton Session');
+  $('proton').replaceChildren(...candidates.map((item,i) =>
+    new Option(`${i===0?'最新会话':'历史会话 '+(i+1)} · UID …${item.uid.slice(-6)}`,item.uid)
+  ));
+  $('proton').disabled = candidates.length === 0;
+  if (!candidates.length) throw new Error('没有找到同时包含 AUTH 和 REFRESH 的 Proton Session');
 
-  if (uids.length > 1) {
-    const prompt = new Option('请选择会话并核对邮箱','',true,true);
-    prompt.disabled = true;
-    $('proton').prepend(prompt);
-    $('status').textContent = '检测到多个 Proton 会话，请先选择。';
-    return;
-  }
+  $('proton').value = candidates[0].uid;
+  $('status').textContent = candidates.length > 1
+    ? `检测到 ${candidates.length} 个会话，已默认选择最新会话。`
+    : '已找到 Proton 会话，正在检测。';
   await inspect();
 }
 
