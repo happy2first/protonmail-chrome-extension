@@ -120,9 +120,15 @@ export async function readLocalSessions(uid) {
 }
 
 export async function readKeySalts(uid) {
-  if (location.origin !== 'https://account.proton.me') {
-    return {ok:false, error:'KeySalt 重放需要 account.proton.me 同源页面', stage:'origin', pathname:location.pathname};
+  const isMail = location.origin === 'https://mail.proton.me';
+  const isAccount = location.origin === 'https://account.proton.me';
+  if (!isMail && !isAccount) {
+    return {ok:false, error:'KeySalt 重放需要 Proton 同源页面', stage:'origin', pathname:location.pathname};
   }
+
+  const appVersion = isMail ? 'web-mail@5.0.133.5' : 'web-account@5.0.420.1';
+  const locale = isMail ? 'en_US' : 'zh_CN';
+
   try {
     let lastStatus = 0;
     let lastCode = null;
@@ -135,8 +141,8 @@ export async function readKeySalts(uid) {
         headers:{
           accept:'application/vnd.protonmail.v1+json',
           'x-pm-uid':uid,
-          'x-pm-appversion':'web-account@5.0.420.1',
-          'x-pm-locale':'zh_CN'
+          'x-pm-appversion':appVersion,
+          'x-pm-locale':locale
         },
         signal:AbortSignal.timeout(15000)
       });
@@ -151,13 +157,29 @@ export async function readKeySalts(uid) {
           .filter(k => k?.ID && k?.KeySalt)
           .map(k => ({id:k.ID, keySalt:k.KeySalt}));
         if (!keySalts.length) {
-          return {ok:false, error:'未返回可用 KeySalt', stage:'parse', status:response.status, protonCode:data.Code, pathname:location.pathname};
+          return {
+            ok:false,
+            error:'未返回可用 KeySalt',
+            stage:'parse',
+            status:response.status,
+            protonCode:data.Code,
+            pathname:location.pathname,
+            origin:location.origin
+          };
         }
         return {
           ok:true,
           keySalts,
-          diagnostics:{status:response.status, protonCode:data.Code, pathname:location.pathname, attempt},
-          client:{accountAppVersion:'web-account@5.0.420.1', locale:'zh_CN'}
+          diagnostics:{
+            status:response.status,
+            protonCode:data.Code,
+            pathname:location.pathname,
+            origin:location.origin,
+            attempt
+          },
+          client:isMail
+            ? {mailAppVersion:appVersion, locale}
+            : {accountAppVersion:appVersion, locale}
         };
       }
 
@@ -171,14 +193,16 @@ export async function readKeySalts(uid) {
       stage:'request',
       status:lastStatus,
       protonCode:lastCode,
-      pathname:location.pathname
+      pathname:location.pathname,
+      origin:location.origin
     };
   } catch (e) {
     return {
       ok:false,
       error:e instanceof Error ? e.message : 'KeySalt 重放失败',
       stage:'exception',
-      pathname:location.pathname
+      pathname:location.pathname,
+      origin:location.origin
     };
   }
 }
