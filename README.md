@@ -19,7 +19,7 @@
 4. 选择仓库内 **extension** 文件夹（里面直接有 `manifest.json`），不要选仓库根目录。
 5. 使用普通窗口登录 `https://mail.proton.me`。
 6. 打开 `https://mail.mcp.happyfirst.top/proton/import` 并完成 Cloudflare Access 登录。部署过服务端更新后刷新此页。保持页面打开。
-7. 切回 Proton 标签页，点击扩展图标。扩展会按实际 Proton API URL 读取会随请求发送的 Cookie，识别可用的 `AUTH-*`、`REFRESH-*`、`Session-Id` 与必要辅助 Cookie；若存在多个会话，会按 `AUTH-*` 的到期时间排序并默认选择最新会话，不再要求先手工判断 UID。
+7. 切回 Proton 标签页，点击扩展图标。扩展会按实际 Proton API URL 读取会随请求发送的 Cookie，并调用 `GET /api/auth/v4/sessions/local` 获取 Proton 官方的 `LocalID ↔ UID` 映射。若当前 URL 是 `/u/4/...`，会优先选择 `LocalID=4` 对应的 UID；只有映射读取失败时才按 `AUTH-*` 到期时间回退选择最新会话。
 8. AUTH、REFRESH、Session-Id 就绪后，扩展会读取当前 Mail URL 的 LocalID（例如 `/u/4/inbox` 中的 `4`），自动打开/复用同一 LocalID 的 `account.proton.me/u/4/mail`，再在该同源环境重放 `GET /api/core/v4/keys/salts`；无需单独点击 KeySalt 按钮。若首次 401，会短暂重试以等待 Account 会话初始化。
 9. 选择对应 MCP 账号，点击“预览并连接”。扩展会先显示本次导入的 Proton 邮箱、目标 MCP 账号、UID、Cookie 名称、KeySalt 数量和完整 JSON；此时尚未发起配对或上传 Bundle。
 10. 如需留档或排障，可在确认窗口点击“导出 JSON”保存本次完整导入内容到本地。该文件包含可用 Session Cookie 和 KeySalt，应按敏感凭证保管。
@@ -45,4 +45,4 @@ Node.js 20+：`npm test`。测试使用虚构 Cookie，不连接真实邮箱。G
 
 已在开发环境通过扩展单元测试、服务端配对/导入测试、原有后端完整测试与 Workers dry-run（最终结果见提交说明）。真实浏览器安装与真实 Proton Session 导入需按上述步骤在桌面验证，未声称通过云端端到端测试。
 
-手动验收：未登录提示、多会话自动选择、Session-Id、同 LocalID KeySalt 重放、导入前预览、取消后不上传、导出 JSON、错误目标账号拒绝、成功导入后管理页状态、关闭 Popup 再打开重新检测。Popup 提供“诊断日志”，仅显示步骤、HTTP 状态、Proton Code、LocalID 和 UID 尾号，不记录 Cookie 值、RefreshToken、KeySalt 或密码。除用户主动导出的 JSON 外，不应留下本地敏感存储。
+手动验收：未登录提示、LocalID→UID 精确会话选择、映射失败时最新会话回退、Session-Id、同 LocalID KeySalt 重放、导入前预览、取消后不上传、导出 JSON、错误目标账号拒绝、成功导入后管理页状态、关闭 Popup 再打开重新检测。Popup 提供“诊断日志”，仅显示步骤、HTTP 状态、Proton Code、LocalID 和 UID 尾号，不记录 Cookie 值、RefreshToken、KeySalt 或密码。除用户主动导出的 JSON 外，不应留下本地敏感存储。

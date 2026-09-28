@@ -41,6 +41,46 @@ export async function readProton(uid) {
   }
 }
 
+export async function readLocalSessions(uid) {
+  if (location.origin !== 'https://mail.proton.me') {
+    return {ok:false, error:'本地会话映射需要 mail.proton.me 同源页面'};
+  }
+  try {
+    const response = await fetch('/api/auth/v4/sessions/local', {
+      credentials:'same-origin',
+      cache:'no-store',
+      redirect:'error',
+      headers:{
+        accept:'application/json',
+        'x-pm-uid':uid,
+        'x-pm-appversion':'web-mail@5.0.133.5',
+        'x-pm-locale':'en_US'
+      },
+      signal:AbortSignal.timeout(15000)
+    });
+    let data = null;
+    try { data = await response.json(); } catch {}
+    if (!response.ok || data?.Code !== 1000) {
+      return {
+        ok:false,
+        error:`/auth/v4/sessions/local HTTP ${response.status}${data?.Code ? ` / Proton ${data.Code}` : ''}`,
+        status:response.status,
+        protonCode:Number(data?.Code) || null
+      };
+    }
+    const sessions = (Array.isArray(data.Sessions) ? data.Sessions : [])
+      .filter(item => item?.UID && Number.isInteger(Number(item?.LocalID)))
+      .map(item => ({
+        uid:String(item.UID),
+        localID:Number(item.LocalID),
+        primaryEmail:typeof item.PrimaryEmail === 'string' ? item.PrimaryEmail : ''
+      }));
+    return {ok:true, sessions};
+  } catch (e) {
+    return {ok:false, error:e instanceof Error ? e.message : '读取本地会话映射失败'};
+  }
+}
+
 export async function readKeySalts(uid) {
   if (location.origin !== 'https://account.proton.me') {
     return {ok:false, error:'KeySalt 重放需要 account.proton.me 同源页面', stage:'origin', pathname:location.pathname};

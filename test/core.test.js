@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {selectCookies,sessionState,sessionCandidates,refreshAvailable,bundleFor} from '../extension/core.js';
-import {readProton,readKeySalts,mcpRequest} from '../extension/bridge.js';
+import {readProton,readLocalSessions,readKeySalts,mcpRequest} from '../extension/bridge.js';
 
 const cookie = (name='AUTH-one',extra={}) => ({
   name,
@@ -121,7 +121,7 @@ test('manifest contains minimal permissions and account origin host permission',
   const root=new URL('../extension/',import.meta.url);
   const manifest=JSON.parse(readFileSync(new URL('manifest.json',root),'utf8'));
   assert.equal(manifest.manifest_version,3);
-  assert.equal(manifest.version,'0.3.3');
+  assert.equal(manifest.version,'0.3.4');
   assert.deepEqual(manifest.permissions,['cookies','scripting']);
   assert.deepEqual(manifest.host_permissions,[
     'https://proton.me/*',
@@ -226,4 +226,44 @@ test('KeySalt bridge returns structured HTTP diagnostics without secrets',async(
   assert.equal(result.pathname,'/u/4/mail');
   assert.equal(attempts,3);
   assert.equal(JSON.stringify(result).includes('uid-demo'),false);
+});
+
+
+test('mail bridge returns LocalID to UID session mapping without secret fields',async()=>{
+  globalThis.location={origin:'https://mail.proton.me'};
+  let call;
+  globalThis.fetch=async(url,opts)=>{
+    call={url,opts};
+    return {
+      ok:true,
+      status:200,
+      json:async()=>({
+        Code:1000,
+        Sessions:[
+          {UID:'uid-4',LocalID:4,PrimaryEmail:'four@proton.me',AccessToken:'MUST_NOT_EXPORT'},
+          {UID:'uid-7',LocalID:7,PrimaryEmail:'seven@proton.me'}
+        ]
+      })
+    };
+  };
+  const result=await readLocalSessions('bootstrap-uid');
+  assert.equal(result.ok,true);
+  assert.deepEqual(result.sessions,[
+    {uid:'uid-4',localID:4,primaryEmail:'four@proton.me'},
+    {uid:'uid-7',localID:7,primaryEmail:'seven@proton.me'}
+  ]);
+  assert.equal(call.url,'/api/auth/v4/sessions/local');
+  assert.equal(call.opts.headers['x-pm-uid'],'bootstrap-uid');
+  assert.equal(JSON.stringify(result).includes('MUST_NOT_EXPORT'),false);
+});
+
+test('popup maps current URL LocalID to exact UID before falling back to newest session',()=>{
+  const root=new URL('../extension/',import.meta.url);
+  const js=readFileSync(new URL('popup.js',root),'utf8');
+  assert.match(js,/readLocalSessions/);
+  assert.match(js,/mapping\.sessions\.find\(item => String\(item\.localID\) === String\(mailLocalId\)\)/);
+  assert.match(js,/当前页面会话/);
+  assert.match(js,/latest-fallback/);
+  assert.match(js,/\$\('copyLog'\)\.disabled = false/);
+  assert.match(js,/\$\('clearLog'\)\.disabled = false/);
 });
