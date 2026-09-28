@@ -1,5 +1,5 @@
 import {PROTON, ACCOUNT, ADMIN, selectCookies, sessionState, sessionCandidates, bundleFor} from './core.js';
-import {readProton, readPersistedSessionUid, readPersistedSessionIndex, readLocalSessions, readKeySalts, mcpRequest} from './bridge.js';
+import {readProton, readPersistedSessionUid, readPersistedSessionIndex, readLocalSessions, readSessionKeyPassword, readKeySalts, mcpRequest} from './bridge.js';
 
 const $ = id => document.getElementById(id);
 let busy = false;
@@ -198,52 +198,47 @@ async function captureBundle(uid, updateUi = false) {
   }
   logEvent('Mail API', 'users/addresses 成功', {uid:uidSuffix(uid),addressCount:mail.addresses?.length || 0});
 
-  let salts;
+  let keyPassword = '';
+  let salts = {keySalts:[],client:{}};
+  let keyMaterialSource = '';
   try {
-    logEvent('KeySalt', '优先使用 Mail 当前会话同源重放', {uid:uidSuffix(uid)});
-    salts = await runIn(selectedTab, readKeySalts, [uid]);
-
-    if (salts.ok) {
-      logEvent('KeySalt', 'Mail 同源获取成功', {
+    if (localId === null) throw new Error('当前 Mail URL 缺少 LocalID，无法恢复浏览器解密材料');
+    logEvent('解密材料', '从当前 Mail 持久会话恢复', {uid:uidSuffix(uid),localID:localId});
+    const recovered = await runIn(selectedTab, readSessionKeyPassword, [Number(localId), uid]);
+    if (recovered.ok) {
+      keyPassword = recovered.keyPassword;
+      keyMaterialSource = 'browser-key-password';
+      logEvent('解密材料', '浏览器 keyPassword 恢复成功', {
         uid:uidSuffix(uid),
-        count:salts.keySalts?.length || 0,
-        status:salts.diagnostics?.status || 200,
-        protonCode:salts.diagnostics?.protonCode || 1000,
-        attempt:salts.diagnostics?.attempt || 1
+        payloadVersion:recovered.diagnostics?.payloadVersion || 'n/a',
+        status:recovered.diagnostics?.status || 200
       });
     } else {
-      logEvent('KeySalt', 'Mail 同源获取失败，尝试 Account 兼容路径', {
+      logEvent('解密材料', '浏览器 keyPassword 恢复失败，回退 KeySalt', {
         uid:uidSuffix(uid),
-        status:salts.status || 'n/a',
-        protonCode:salts.protonCode || 'n/a',
-        stage:salts.stage || 'n/a'
+        stage:recovered.stage || 'n/a',
+        status:recovered.status || 'n/a',
+        protonCode:recovered.protonCode || 'n/a'
       });
 
-      const mailFailure = salts.error || 'Mail 同源 KeySalt 获取失败';
-      try {
-        salts = await withAccountTab(uid, tabId => runIn(tabId, readKeySalts, [uid]));
-      } catch (accountError) {
-        const accountMessage = accountError instanceof Error ? accountError.message : 'Account 兼容路径失败';
-        throw new Error(`KeySalt 获取失败。Mail：${mailFailure}；Account：${accountMessage}`);
-      }
-
+      logEvent('KeySalt', '尝试 Mail 当前会话同源重放', {uid:uidSuffix(uid)});
+      salts = await runIn(selectedTab, readKeySalts, [uid]);
       if (!salts.ok) {
-        logEvent('KeySalt', 'Account 兼容路径获取失败', {
-          uid:uidSuffix(uid),
-          status:salts.status || 'n/a',
-          protonCode:salts.protonCode || 'n/a',
-          stage:salts.stage || 'n/a',
-          path:salts.pathname || 'n/a'
-        });
-        throw new Error(`KeySalt 获取失败。Mail：${mailFailure}；Account：${salts.error}`);
+        const mailFailure = salts.error || 'Mail 同源 KeySalt 获取失败';
+        try {
+          salts = await withAccountTab(uid, tabId => runIn(tabId, readKeySalts, [uid]));
+        } catch (accountError) {
+          const accountMessage = accountError instanceof Error ? accountError.message : 'Account 兼容路径失败';
+          throw new Error(`浏览器解密材料恢复失败：${recovered.error}；KeySalt Mail：${mailFailure}；Account：${accountMessage}`);
+        }
+        if (!salts.ok) {
+          throw new Error(`浏览器解密材料恢复失败：${recovered.error}；KeySalt Mail：${mailFailure}；Account：${salts.error}`);
+        }
       }
-
-      logEvent('KeySalt', 'Account 兼容路径获取成功', {
+      keyMaterialSource = 'key-salt';
+      logEvent('KeySalt', '兼容路径获取成功', {
         uid:uidSuffix(uid),
-        count:salts.keySalts?.length || 0,
-        status:salts.diagnostics?.status || 200,
-        protonCode:salts.diagnostics?.protonCode || 1000,
-        attempt:salts.diagnostics?.attempt || 1
+        count:salts.keySalts?.length || 0
       });
     }
   } catch (error) {
@@ -256,7 +251,9 @@ async function captureBundle(uid, updateUi = false) {
     email:mail.email,
     user:mail.user,
     addresses:mail.addresses,
-    keySalts:salts.keySalts,
+    keyPassword,
+    keySalts:salts.keySalts || [],
+    keyMaterialSource,
     client:{...(mail.client || {}),...(salts.client || {})}
   };
   const bundle = bundleFor(uid, cookies, result);
@@ -277,17 +274,30 @@ function accountMeta() {
   };
 }
 
+function publicBundle(bundle) {
+  const copy = structuredClone(bundle);
+  if (copy.keyPassword) {
+    delete copy.keyPassword;
+    copy.keyMaterial = {
+      source:'browser-key-password',
+      secretIncluded:false,
+      note:'导出/预览不包含 keyPassword；确认导入时仅以内存中的实际 Bundle 上传'
+    };
+  }
+  return copy;
+}
+
 function importEnvelope(bundle, account) {
   return {
-    format:'personal-mail-mcp-proton-import',
-    version:1,
+    format:'personal-mail-mcp-proton-import-preview',
+    version:2,
     exportedAt:new Date().toISOString(),
     target:{
       accountId:account.id,
       label:account.label,
       configuredEmail:account.email
     },
-    bundle
+    bundle:publicBundle(bundle)
   };
 }
 
@@ -298,7 +308,9 @@ function showPreview(bundle, account) {
   $('previewAccount').textContent = account.label + (account.email ? ` · ${account.email}` : '');
   $('previewUid').textContent = bundle.uid.length > 8 ? '…' + bundle.uid.slice(-8) : bundle.uid;
   $('previewCookies').textContent = `${bundle.session.cookies.length} 个：${bundle.session.cookies.map(c => c.name).join(', ')}`;
-  $('previewSalts').textContent = `${bundle.keySalts.length} 个`;
+  $('previewSalts').textContent = bundle.keyPassword
+    ? '浏览器解密密钥已获取（不显示）'
+    : `${bundle.keySalts?.length || 0} 个 KeySalt`;
   $('previewJson').textContent = JSON.stringify(envelope, null, 2);
   $('previewDialog').showModal();
   $('status').textContent = '请核对导入内容；确认后才会上传。';
@@ -324,7 +336,7 @@ function exportPending() {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(href), 1000);
-  $('status').textContent = '已导出本次导入 JSON。该文件包含敏感 Session，请妥善保管。';
+  $('status').textContent = '已导出预览 JSON。文件包含 Session Cookie，但不包含浏览器 keyPassword。';
 }
 
 async function inspect() {
