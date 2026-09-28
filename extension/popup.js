@@ -1,5 +1,5 @@
 import {PROTON, ACCOUNT, ADMIN, selectCookies, sessionState, sessionCandidates, bundleFor} from './core.js';
-import {readProton, readPersistedSessionUid, readLocalSessions, readKeySalts, mcpRequest} from './bridge.js';
+import {readProton, readPersistedSessionUid, readPersistedSessionIndex, readLocalSessions, readKeySalts, mcpRequest} from './bridge.js';
 
 const $ = id => document.getElementById(id);
 let busy = false;
@@ -49,45 +49,96 @@ async function waitForTab(tabId, timeoutMs = 15000) {
   throw new Error('account.proton.me 页面加载超时');
 }
 
-async function withAccountTab(localId, expectedUid, fn) {
-  const expectedPrefix = localId ? `/u/${localId}/` : null;
-  const targetUrl = localId ? `${ACCOUNT}/u/${localId}/mail` : ACCOUNT + '/mail';
-  const tabs = await chrome.tabs.query({url:ACCOUNT + '/*'});
-  let tab = tabs.find(t => !t.incognito && (!expectedPrefix || new URL(t.url).pathname.startsWith(expectedPrefix)));
-  let created = false;
-  if (!tab) {
-    logEvent('KeySalt', '打开 Account 同会话页面', {localID:localId || 'none'});
-    tab = await chrome.tabs.create({url:targetUrl, active:false});
-    created = true;
-  } else {
-    logEvent('KeySalt', '复用 Account 同会话页面', {localID:localId || 'none'});
-  }
+async function withAccountTab(expectedUid, fn) {
+  // Account and Mail can keep different LocalID slot numbers for the same UID.
+  // Always resolve the Account-side slot by UID instead of reusing Mail's LocalID.
+  const tab = await chrome.tabs.create({url:ACCOUNT + '/mail', active:false});
   try {
+    logEvent('KeySalt', '打开 Account 页面', {uid:uidSuffix(expectedUid)});
     await waitForTab(tab.id);
     await sleep(900);
-    const current = await chrome.tabs.get(tab.id);
-    if (!current.url || new URL(current.url).origin !== ACCOUNT) throw new Error('account.proton.me 未保持登录状态');
-    const actualLocalId = localIdFromUrl(current.url);
-    logEvent('KeySalt', 'Account 页面已就绪', {expectedLocalID:localId || 'none',actualLocalID:actualLocalId || 'none'});
-    if (localId && actualLocalId !== localId) {
-      throw new Error(`Account LocalID 不匹配：期望 ${localId}，实际 ${actualLocalId || '无'}`);
+
+    let current = await chrome.tabs.get(tab.id);
+    if (!current.url || new URL(current.url).origin !== ACCOUNT) {
+      throw new Error('account.proton.me 未保持登录状态');
     }
-    if (localId !== null && localId !== undefined) {
-      const persisted = await runIn(tab.id, readPersistedSessionUid, [Number(localId)]);
-      if (persisted.ok) {
-        logEvent('KeySalt', 'Account 持久会话 UID', {localID:localId,uid:uidSuffix(persisted.uid)});
-        if (expectedUid && persisted.uid !== expectedUid) {
-          throw new Error(`Account 当前 LocalID 对应其他 UID：${uidSuffix(persisted.uid)}`);
+
+    let index = await runIn(tab.id, readPersistedSessionIndex, []);
+    if (!index.ok) throw new Error(index.error || '无法读取 Account 会话索引');
+    logEvent('KeySalt', '读取 Account 会话索引', {sessions:index.sessions.length});
+
+    let match = index.sessions.find(item => item.uid === expectedUid) || null;
+
+    if (!match) {
+      const accountLocalId = localIdFromUrl(current.url);
+      if (accountLocalId !== null) {
+        const active = await runIn(tab.id, readPersistedSessionUid, [Number(accountLocalId)]);
+        if (active.ok) {
+          const mapping = await runIn(tab.id, readLocalSessions, [active.uid]);
+          if (mapping.ok) {
+            const exact = mapping.sessions.find(item => item.uid === expectedUid);
+            if (exact) {
+              match = {localID:exact.localID,uid:exact.uid};
+              logEvent('KeySalt', 'Account API 映射找到目标 UID', {
+                accountLocalID:exact.localID,
+                uid:uidSuffix(exact.uid)
+              });
+            }
+          }
         }
-      } else {
-        logEvent('KeySalt', 'Account 持久会话 UID 不可用', {localID:localId});
       }
     }
+
+    if (!match) {
+      throw new Error(`Account 应用中没有当前 Mail UID 的会话：${uidSuffix(expectedUid)}。请先在 account.proton.me 切换到同一 Proton 账号后重试。`);
+    }
+
+    logEvent('KeySalt', 'Account UID 匹配', {
+      accountLocalID:match.localID,
+      uid:uidSuffix(match.uid)
+    });
+
+    const targetUrl = `${ACCOUNT}/u/${match.localID}/mail`;
+    if (localIdFromUrl(current.url) !== String(match.localID)) {
+      await chrome.tabs.update(tab.id,{url:targetUrl});
+      await waitForTab(tab.id);
+      await sleep(900);
+      current = await chrome.tabs.get(tab.id);
+    }
+
+    if (!current.url || new URL(current.url).origin !== ACCOUNT) {
+      throw new Error('Account 会话切换失败');
+    }
+
+    const actualLocalId = localIdFromUrl(current.url);
+    const persisted = actualLocalId === null
+      ? {ok:false}
+      : await runIn(tab.id, readPersistedSessionUid, [Number(actualLocalId)]);
+    logEvent('KeySalt', 'Account 目标会话已就绪', {
+      accountLocalID:actualLocalId || 'none',
+      uid:persisted.ok ? uidSuffix(persisted.uid) : 'unknown'
+    });
+    if (!persisted.ok || persisted.uid !== expectedUid) {
+      throw new Error('Account 页面没有切换到与 Mail 相同的 Proton UID');
+    }
+
+    const accountCookies = await chrome.cookies.getAll({
+      url:ACCOUNT + '/api/core/v4/keys/salts',
+      storeId
+    });
+    const authName = `AUTH-${expectedUid}`;
+    const hasAuth = accountCookies.some(cookie => cookie.name === authName && cookie.value);
+    logEvent('KeySalt', 'Account Cookie 检查', {
+      auth:hasAuth ? 'yes' : 'no',
+      cookieCount:accountCookies.length
+    });
+    if (!hasAuth) {
+      throw new Error('Account 域缺少当前 UID 的 AUTH Cookie，请在 account.proton.me 切换到同一账号后重试');
+    }
+
     return await fn(tab.id);
   } finally {
-    if (created) {
-      try { await chrome.tabs.remove(tab.id); } catch {}
-    }
+    try { await chrome.tabs.remove(tab.id); } catch {}
   }
 }
 
@@ -149,7 +200,7 @@ async function captureBundle(uid, updateUi = false) {
 
   let salts;
   try {
-    salts = await withAccountTab(localId, uid, tabId => runIn(tabId, readKeySalts, [uid]));
+    salts = await withAccountTab(uid, tabId => runIn(tabId, readKeySalts, [uid]));
     if (!salts.ok) {
       logEvent('KeySalt', '获取失败', {
         uid:uidSuffix(uid),
