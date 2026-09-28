@@ -322,3 +322,30 @@ test('persisted session index enumerates only ps-* LocalID and UID metadata',()=
   assert.equal(JSON.stringify(result).includes('SECRET-'),false);
   globalThis.localStorage=previous;
 });
+
+
+test('mail origin can replay key salts with mail app headers',async()=>{
+  globalThis.location={origin:'https://mail.proton.me',pathname:'/u/7/inbox'};
+  let call;
+  globalThis.fetch=async(url,opts)=>{
+    call={url,opts};
+    return {ok:true,status:200,json:async()=>({Code:1000,KeySalts:[{ID:'k-mail',KeySalt:'fixture-mail'}]})};
+  };
+  const result=await readKeySalts('uid-mail');
+  assert.equal(result.ok,true);
+  assert.deepEqual(result.keySalts,[{id:'k-mail',keySalt:'fixture-mail'}]);
+  assert.equal(call.url,'/api/core/v4/keys/salts');
+  assert.equal(call.opts.credentials,'same-origin');
+  assert.equal(call.opts.headers['x-pm-uid'],'uid-mail');
+  assert.match(call.opts.headers['x-pm-appversion'],/^web-mail@/);
+  assert.equal(result.diagnostics.origin,'https://mail.proton.me');
+});
+
+test('popup tries Mail-origin key salts before Account fallback',()=>{
+  const root=new URL('../extension/',import.meta.url);
+  const js=readFileSync(new URL('popup.js',root),'utf8');
+  const mailReplay=js.indexOf("runIn(selectedTab, readKeySalts, [uid])");
+  const accountFallback=js.indexOf("withAccountTab(uid, tabId => runIn(tabId, readKeySalts, [uid]))");
+  assert.ok(mailReplay>=0);
+  assert.ok(accountFallback>mailReplay);
+});
