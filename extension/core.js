@@ -59,6 +59,23 @@ export function refreshAvailable(cookies, uid) {
   return sessionState(cookies, uid).ready;
 }
 
+export function sessionCandidates(rows, now = Date.now()) {
+  const byUid = new Map();
+  for (const c of rows || []) {
+    if (!c?.name?.startsWith('AUTH-') || !c.value) continue;
+    if (c.expirationDate !== undefined && c.expirationDate !== null && c.expirationDate * 1000 <= now) continue;
+    const uid = c.name.slice(5);
+    if (!/^[A-Za-z0-9_-]{1,256}$/.test(uid)) continue;
+    const current = byUid.get(uid);
+    const expires = Number(c.expirationDate || 0);
+    if (!current || expires > current.expires) byUid.set(uid,{uid,expires});
+  }
+  return [...byUid.values()]
+    .map(x => ({...x,state:sessionState(rows,x.uid)}))
+    .filter(x => x.state.auth && x.state.refresh)
+    .sort((a,b) => Number(b.state.ready)-Number(a.state.ready) || b.expires-a.expires || a.uid.localeCompare(b.uid));
+}
+
 export function bundleFor(uid, cookies, result) {
   if (!result?.ok || !result.user?.id || !result.addresses?.length || !result.keySalts?.length) throw new Error('账号或 KeySalt 未就绪');
   const state = sessionState(cookies, uid);
