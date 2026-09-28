@@ -42,34 +42,66 @@ export async function readProton(uid) {
 }
 
 export async function readKeySalts(uid) {
-  if (location.origin !== 'https://account.proton.me') return {ok:false, error:'KeySalt 重放需要 account.proton.me 同源页面'};
+  if (location.origin !== 'https://account.proton.me') {
+    return {ok:false, error:'KeySalt 重放需要 account.proton.me 同源页面', stage:'origin', pathname:location.pathname};
+  }
   try {
-    const response = await fetch('/api/core/v4/keys/salts', {
-      credentials:'same-origin',
-      cache:'no-store',
-      redirect:'error',
-      headers:{
-        accept:'application/vnd.protonmail.v1+json',
-        'x-pm-uid':uid,
-        'x-pm-appversion':'web-account@5.0.420.1',
-        'x-pm-locale':'zh_CN'
-      },
-      signal:AbortSignal.timeout(15000)
-    });
-    if (!response.ok) throw new Error(`/core/v4/keys/salts HTTP ${response.status}`);
-    const data = await response.json();
-    if (data.Code !== 1000) throw new Error(`/core/v4/keys/salts Proton ${Number(data.Code) || '响应异常'}`);
-    const keySalts = (data.KeySalts || [])
-      .filter(k => k?.ID && k?.KeySalt)
-      .map(k => ({id:k.ID, keySalt:k.KeySalt}));
-    if (!keySalts.length) throw new Error('未返回可用 KeySalt');
+    let lastStatus = 0;
+    let lastCode = null;
+    let lastError = '';
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const response = await fetch('/api/core/v4/keys/salts', {
+        credentials:'same-origin',
+        cache:'no-store',
+        redirect:'error',
+        headers:{
+          accept:'application/vnd.protonmail.v1+json',
+          'x-pm-uid':uid,
+          'x-pm-appversion':'web-account@5.0.420.1',
+          'x-pm-locale':'zh_CN'
+        },
+        signal:AbortSignal.timeout(15000)
+      });
+      lastStatus = response.status;
+      let data = null;
+      try { data = await response.json(); } catch {}
+      lastCode = Number(data?.Code) || null;
+      lastError = typeof data?.Error === 'string' ? data.Error : '';
+
+      if (response.ok && data?.Code === 1000) {
+        const keySalts = (data.KeySalts || [])
+          .filter(k => k?.ID && k?.KeySalt)
+          .map(k => ({id:k.ID, keySalt:k.KeySalt}));
+        if (!keySalts.length) {
+          return {ok:false, error:'未返回可用 KeySalt', stage:'parse', status:response.status, protonCode:data.Code, pathname:location.pathname};
+        }
+        return {
+          ok:true,
+          keySalts,
+          diagnostics:{status:response.status, protonCode:data.Code, pathname:location.pathname, attempt},
+          client:{accountAppVersion:'web-account@5.0.420.1', locale:'zh_CN'}
+        };
+      }
+
+      if (response.status !== 401 || attempt === 3) break;
+      await new Promise(resolve => setTimeout(resolve, attempt * 500));
+    }
+
     return {
-      ok:true,
-      keySalts,
-      client:{accountAppVersion:'web-account@5.0.420.1', locale:'zh_CN'}
+      ok:false,
+      error:`/core/v4/keys/salts HTTP ${lastStatus}${lastCode ? ` / Proton ${lastCode}` : ''}${lastError ? ` · ${lastError}` : ''}`,
+      stage:'request',
+      status:lastStatus,
+      protonCode:lastCode,
+      pathname:location.pathname
     };
   } catch (e) {
-    return {ok:false, error:e instanceof Error ? e.message : 'KeySalt 重放失败'};
+    return {
+      ok:false,
+      error:e instanceof Error ? e.message : 'KeySalt 重放失败',
+      stage:'exception',
+      pathname:location.pathname
+    };
   }
 }
 
