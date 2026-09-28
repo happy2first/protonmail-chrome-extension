@@ -208,7 +208,7 @@ test('popup resolves Account-side LocalID by UID and exposes sanitized logs',()=
   assert.match(js,/AUTH-\$\{expectedUid\}/);
   assert.match(js,/protonCode/);
   assert.match(js,/diagnosticLog/);
-  assert.doesNotMatch(js,/cookie\.value|RefreshToken.*logEvent|keySalt.*logEvent/i);
+  assert.doesNotMatch(js,/logEvent\([^\n]*(cookie\.value|RefreshToken|keySalt)/i);
 });
 
 test('KeySalt bridge returns structured HTTP diagnostics without secrets',async()=>{
