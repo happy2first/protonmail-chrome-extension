@@ -79,10 +79,11 @@ export function readPersistedSessionIndex() {
 }
 
 export async function readLocalSessions(uid) {
-  if (location.origin !== 'https://mail.proton.me') {
-    return {ok:false, error:'本地会话映射需要 mail.proton.me 同源页面'};
+  if (!['https://mail.proton.me','https://account.proton.me'].includes(location.origin)) {
+    return {ok:false, error:'本地会话映射需要 Proton 同源页面'};
   }
   try {
+    const accountOrigin = location.origin === 'https://account.proton.me';
     const response = await fetch('/api/auth/v4/sessions/local', {
       credentials:'same-origin',
       cache:'no-store',
@@ -90,8 +91,8 @@ export async function readLocalSessions(uid) {
       headers:{
         accept:'application/json',
         'x-pm-uid':uid,
-        'x-pm-appversion':'web-mail@5.0.133.5',
-        'x-pm-locale':'en_US'
+        'x-pm-appversion':accountOrigin ? 'web-account@5.0.420.1' : 'web-mail@5.0.133.5',
+        'x-pm-locale':accountOrigin ? 'zh_CN' : 'en_US'
       },
       signal:AbortSignal.timeout(15000)
     });
