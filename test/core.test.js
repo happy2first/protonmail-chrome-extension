@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {selectCookies,sessionState,refreshAvailable,bundleFor} from '../extension/core.js';
+import {selectCookies,sessionState,sessionCandidates,refreshAvailable,bundleFor} from '../extension/core.js';
 import {readProton,readKeySalts,mcpRequest} from '../extension/bridge.js';
 
 const cookie = (name='AUTH-one',extra={}) => ({
@@ -121,7 +121,7 @@ test('manifest contains minimal permissions and account origin host permission',
   const root=new URL('../extension/',import.meta.url);
   const manifest=JSON.parse(readFileSync(new URL('manifest.json',root),'utf8'));
   assert.equal(manifest.manifest_version,3);
-  assert.equal(manifest.version,'0.3.0');
+  assert.equal(manifest.version,'0.3.1');
   assert.deepEqual(manifest.permissions,['cookies','scripting']);
   assert.deepEqual(manifest.host_permissions,[
     'https://mail.proton.me/*',
@@ -155,4 +155,30 @@ test('popup previews exact import payload before upload and supports local JSON 
   assert.doesNotMatch(js.slice(previewStart,confirmStart),/callMcp\('pair'|callMcp\('import'/);
   assert.match(js.slice(confirmStart),/callMcp\('pair'/);
   assert.match(js.slice(confirmStart),/callMcp\('import'/);
+});
+
+
+test('session candidates default to newest complete AUTH/REFRESH session',()=>{
+  const rows=[
+    cookie('AUTH-old',{expirationDate:200,path:'/api/'}),
+    cookie('REFRESH-old',{expirationDate:200,path:'/api/auth/refresh'}),
+    cookie('AUTH-new',{expirationDate:500,path:'/api/'}),
+    cookie('REFRESH-new',{expirationDate:500,path:'/api/auth/refresh'}),
+    cookie('AUTH-incomplete',{expirationDate:900,path:'/api/'}),
+    cookie('Session-Id',{domain:'.proton.me',hostOnly:false,path:'/'})
+  ];
+  const candidates=sessionCandidates(rows,1000);
+  assert.deepEqual(candidates.map(x=>x.uid),['new','old']);
+  assert.equal(candidates[0].state.ready,true);
+});
+
+test('popup reads cookies by Proton API URLs and auto-selects newest session',()=>{
+  const root=new URL('../extension/',import.meta.url);
+  const js=readFileSync(new URL('popup.js',root),'utf8');
+  assert.match(js,/\/api\/core\/v4\/addresses/);
+  assert.match(js,/\/api\/auth\/refresh/);
+  assert.match(js,/sessionCandidates\(rows\)/);
+  assert.match(js,/最新会话/);
+  assert.match(js,/candidates\[0\]\.uid/);
+  assert.doesNotMatch(js,/请选择会话并核对邮箱/);
 });

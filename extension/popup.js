@@ -1,4 +1,4 @@
-import {PROTON, ACCOUNT, ADMIN, selectCookies, sessionState, bundleFor} from './core.js';
+import {PROTON, ACCOUNT, ADMIN, selectCookies, sessionState, sessionCandidates, bundleFor} from './core.js';
 import {readProton, readKeySalts, mcpRequest} from './bridge.js';
 
 const $ = id => document.getElementById(id);
@@ -62,24 +62,41 @@ async function currentCookies() {
   if (!selectedTab || !storeId) throw new Error('请重新检测 Proton 页面');
   const tab = await chrome.tabs.get(selectedTab);
   if (new URL(tab.url).origin !== PROTON) throw new Error('Proton 页面已切换，请重新检测');
-  return chrome.cookies.getAll({domain:'proton.me',storeId});
+  const urls = [PROTON + '/api/core/v4/addresses', PROTON + '/api/auth/refresh'];
+  const batches = await Promise.all(urls.map(url => chrome.cookies.getAll({url,storeId})));
+  const unique = new Map();
+  for (const cookie of batches.flat()) {
+    const key = [cookie.storeId || storeId,cookie.domain,cookie.path,cookie.name].join('|');
+    unique.set(key,cookie);
+  }
+  return [...unique.values()];
 }
 
 async function captureBundle(uid, updateUi = false) {
-  const cookies = selectCookies(await currentCookies(), uid);
-  const state = sessionState(cookies, uid);
+  const rows = await currentCookies();
+  const state = sessionState(rows, uid);
   if (updateUi) {
     $('auth').textContent = state.auth ? '已获取' : '缺失';
     $('sessionId').textContent = state.sessionId ? '已获取' : '缺失';
     $('refresh').textContent = state.refresh ? '已获取' : '缺失';
-    $('salt').textContent = '获取中…';
+    $('salt').textContent = state.ready ? '获取中…' : '待检测';
   }
+  if (!state.auth) throw new Error('未找到当前会话的 AUTH Cookie');
+  if (!state.refresh) throw new Error('未找到当前会话的 REFRESH Cookie');
+  if (!state.sessionId) throw new Error('未找到 Proton Session-Id Cookie');
 
+  const cookies = selectCookies(rows, uid);
   const mail = await runIn(selectedTab, readProton, [uid]);
   if (!mail.ok) throw new Error(mail.error);
 
-  const salts = await withAccountTab(tabId => runIn(tabId, readKeySalts, [uid]));
-  if (!salts.ok) throw new Error(salts.error);
+  let salts;
+  try {
+    salts = await withAccountTab(tabId => runIn(tabId, readKeySalts, [uid]));
+    if (!salts.ok) throw new Error(salts.error);
+  } catch (error) {
+    if (updateUi) $('salt').textContent = '获取失败';
+    throw error;
+  }
 
   const result = {
     ok:true,
@@ -197,23 +214,18 @@ async function detect() {
   if (!storeId) throw new Error('无法确定 Proton Cookie Store');
 
   const rows = await currentCookies();
-  const uids = [...new Set(rows.filter(c =>
-    c.name.startsWith('AUTH-') &&
-    c.value &&
-    (c.expirationDate === undefined || c.expirationDate * 1000 > Date.now())
-  ).map(c => c.name.slice(5)))];
+  const candidates = sessionCandidates(rows);
 
-  $('proton').replaceChildren(...uids.map((uid,i) => new Option(`会话 ${i+1} · UID …${uid.slice(-6)}`,uid)));
-  $('proton').disabled = uids.length === 0;
-  if (!uids.length) throw new Error('没有已登录的 Proton Session');
+  $('proton').replaceChildren(...candidates.map((item,i) =>
+    new Option(`${i===0?'最新会话':'历史会话 '+(i+1)} · UID …${item.uid.slice(-6)}`,item.uid)
+  ));
+  $('proton').disabled = candidates.length === 0;
+  if (!candidates.length) throw new Error('没有找到同时包含 AUTH 和 REFRESH 的 Proton Session');
 
-  if (uids.length > 1) {
-    const prompt = new Option('请选择会话并核对邮箱','',true,true);
-    prompt.disabled = true;
-    $('proton').prepend(prompt);
-    $('status').textContent = '检测到多个 Proton 会话，请先选择。';
-    return;
-  }
+  $('proton').value = candidates[0].uid;
+  $('status').textContent = candidates.length > 1
+    ? `检测到 ${candidates.length} 个会话，已默认选择最新会话。`
+    : '已找到 Proton 会话，正在检测。';
   await inspect();
 }
 
