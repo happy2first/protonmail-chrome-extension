@@ -121,9 +121,10 @@ test('manifest contains minimal permissions and account origin host permission',
   const root=new URL('../extension/',import.meta.url);
   const manifest=JSON.parse(readFileSync(new URL('manifest.json',root),'utf8'));
   assert.equal(manifest.manifest_version,3);
-  assert.equal(manifest.version,'0.3.1');
+  assert.equal(manifest.version,'0.3.2');
   assert.deepEqual(manifest.permissions,['cookies','scripting']);
   assert.deepEqual(manifest.host_permissions,[
+    'https://proton.me/*',
     'https://mail.proton.me/*',
     'https://account.proton.me/*',
     'https://mail.mcp.happyfirst.top/*'
@@ -181,4 +182,11 @@ test('popup reads cookies by Proton API URLs and auto-selects newest session',()
   assert.match(js,/最新会话/);
   assert.match(js,/candidates\[0\]\.uid/);
   assert.doesNotMatch(js,/请选择会话并核对邮箱/);
+});
+
+
+test('manifest includes parent proton.me permission for Session-Id domain cookie',()=>{
+  const root=new URL('../extension/',import.meta.url);
+  const manifest=JSON.parse(readFileSync(new URL('manifest.json',root),'utf8'));
+  assert.ok(manifest.host_permissions.includes('https://proton.me/*'));
 });
