@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {selectCookies,sessionState,sessionCandidates,refreshAvailable,bundleFor} from '../extension/core.js';
-import {readProton,readPersistedSessionUid,readPersistedSessionIndex,readLocalSessions,readKeySalts,mcpRequest} from '../extension/bridge.js';
+import {readProton,readPersistedSessionUid,readPersistedSessionIndex,readLocalSessions,readSessionKeyPassword,readKeySalts,mcpRequest} from '../extension/bridge.js';
 
 const cookie = (name='AUTH-one',extra={}) => ({
   name,
@@ -43,7 +43,7 @@ test('selection rejects missing refresh/session, partitioned and expired cookies
   assert.throws(()=>selectCookies([cookie('AUTH-one',{expirationDate:1}),...base.slice(1)],'one',2000));
 });
 
-test('bundle v2 requires matching usable KeySalt and structured cookies',()=>{
+test('bundle v3 prefers browser-derived keyPassword and still supports KeySalt fallback',()=>{
   const cookies=selectCookies([
     cookie(),
     cookie('REFRESH-one',{path:'/api/auth/refresh'}),
@@ -54,15 +54,20 @@ test('bundle v2 requires matching usable KeySalt and structured cookies',()=>{
     email:'example@proton.me',
     user:{id:'user',keyIds:['k'],passwordMode:1},
     addresses:[{id:'a',email:'example@proton.me'}],
-    keySalts:[{id:'k',keySalt:'fixture-salt'}],
-    client:{mailAppVersion:'web-mail@test',accountAppVersion:'web-account@test',locale:'en_US'}
+    keyPassword:'derived-key-password',
+    keySalts:[],
+    client:{mailAppVersion:'web-mail@test',locale:'en_US'}
   };
   const bundle=bundleFor('one',cookies,result);
-  assert.equal(bundle.version,2);
+  assert.equal(bundle.version,3);
   assert.equal(bundle.source,'proton-browser-session');
   assert.equal(bundle.session.cookies.length,3);
   assert.equal(bundle.user.id,'user');
-  assert.throws(()=>bundleFor('one',cookies,{...result,keySalts:[{id:'wrong',keySalt:'fixture'}]}));
+  assert.equal(bundle.keyPassword,'derived-key-password');
+
+  const fallback=bundleFor('one',cookies,{...result,keyPassword:'',keySalts:[{id:'k',keySalt:'fixture-salt'}]});
+  assert.equal(fallback.keySalts.length,1);
+  assert.throws(()=>bundleFor('one',cookies,{...result,keyPassword:'',keySalts:[{id:'wrong',keySalt:'fixture'}]}));
 });
 
 test('mail bridge reads users/addresses only and never returns private keys',async()=>{
@@ -121,7 +126,7 @@ test('manifest contains minimal permissions and account origin host permission',
   const root=new URL('../extension/',import.meta.url);
   const manifest=JSON.parse(readFileSync(new URL('manifest.json',root),'utf8'));
   assert.equal(manifest.manifest_version,3);
-  assert.equal(manifest.version,'0.3.7');
+  assert.equal(manifest.version,'0.4.0');
   assert.deepEqual(manifest.permissions,['cookies','scripting']);
   assert.deepEqual(manifest.host_permissions,[
     'https://proton.me/*',
@@ -348,4 +353,51 @@ test('popup tries Mail-origin key salts before Account fallback',()=>{
   const accountFallback=js.indexOf("withAccountTab(uid, tabId => runIn(tabId, readKeySalts, [uid]))");
   assert.ok(mailReplay>=0);
   assert.ok(accountFallback>mailReplay);
+});
+
+
+test('browser persisted session can recover derived keyPassword with WebCrypto AES-GCM',async()=>{
+  const previousLocation=globalThis.location;
+  const previousLocalStorage=globalThis.localStorage;
+  const previousFetch=globalThis.fetch;
+
+  const rawKey=crypto.getRandomValues(new Uint8Array(32));
+  const cryptoKey=await crypto.subtle.importKey('raw',rawKey,{name:'AES-GCM'},false,['encrypt']);
+  const iv=crypto.getRandomValues(new Uint8Array(16));
+  const plain=new TextEncoder().encode(JSON.stringify({keyPassword:'derived-secret'}));
+  const ciphertext=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},cryptoKey,plain));
+  const encrypted=new Uint8Array(iv.length+ciphertext.length);
+  encrypted.set(iv,0); encrypted.set(ciphertext,iv.length);
+  const b64=bytes=>Buffer.from(bytes).toString('base64');
+
+  globalThis.location={origin:'https://mail.proton.me'};
+  globalThis.localStorage={
+    getItem:key=>key==='ps-7'
+      ? JSON.stringify({UID:'uid-seven',payloadVersion:1,blob:b64(encrypted)})
+      : null
+  };
+  globalThis.fetch=async(url,opts)=>({
+    ok:true,
+    status:200,
+    json:async()=>({Code:1000,ClientKey:b64(rawKey)})
+  });
+
+  const result=await readSessionKeyPassword(7,'uid-seven');
+  assert.equal(result.ok,true);
+  assert.equal(result.keyPassword,'derived-secret');
+  assert.equal(result.diagnostics.payloadVersion,1);
+
+  globalThis.location=previousLocation;
+  globalThis.localStorage=previousLocalStorage;
+  globalThis.fetch=previousFetch;
+});
+
+test('preview and export redact keyPassword while confirmed import keeps in-memory secret',()=>{
+  const root=new URL('../extension/',import.meta.url);
+  const js=readFileSync(new URL('popup.js',root),'utf8');
+  assert.match(js,/delete copy\.keyPassword/);
+  assert.match(js,/secretIncluded:false/);
+  assert.match(js,/pendingImport = \{bundle, account, envelope\}/);
+  assert.match(js,/bundle:pending\.bundle/);
+  assert.doesNotMatch(js,/JSON\.stringify\(pendingImport\.bundle/);
 });
