@@ -1,4 +1,4 @@
-import {PROTON, ACCOUNT, ADMIN, selectCookies, sessionState, bundleFor} from './core.js';
+import {PROTON, ACCOUNT, ADMIN, selectCookies, sessionState, sessionCandidates, bundleFor} from './core.js';
 import {readProton, readKeySalts, mcpRequest} from './bridge.js';
 
 const $ = id => document.getElementById(id);
@@ -62,7 +62,14 @@ async function currentCookies() {
   if (!selectedTab || !storeId) throw new Error('请重新检测 Proton 页面');
   const tab = await chrome.tabs.get(selectedTab);
   if (new URL(tab.url).origin !== PROTON) throw new Error('Proton 页面已切换，请重新检测');
-  return chrome.cookies.getAll({domain:'proton.me',storeId});
+  const urls = [PROTON + '/api/core/v4/addresses', PROTON + '/api/auth/refresh'];
+  const batches = await Promise.all(urls.map(url => chrome.cookies.getAll({url,storeId})));
+  const unique = new Map();
+  for (const cookie of batches.flat()) {
+    const key = [cookie.storeId || storeId,cookie.domain,cookie.path,cookie.name].join('|');
+    unique.set(key,cookie);
+  }
+  return [...unique.values()];
 }
 
 async function captureBundle(uid, updateUi = false) {
