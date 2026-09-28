@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Proton → Personal Mail MCP",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "预览并确认后，将当前 Proton Browser Session Bundle 安全导入 Personal Mail MCP。",
   "minimum_chrome_version": "120",
   "permissions": [
@@ -9,6 +9,7 @@
     "scripting"
   ],
   "host_permissions": [
+    "https://proton.me/*",
     "https://mail.proton.me/*",
     "https://account.proton.me/*",
     "https://mail.mcp.happyfirst.top/*"
