@@ -1,4 +1,4 @@
-// Runs only in Chrome's ISOLATED world. Reads only the ps-<LocalID>.UID mapping from Proton storage; never reads password fields.
+// Runs only in Chrome's ISOLATED world. It can recover Proton's derived keyPassword from the current encrypted persisted session; it never reads the user's raw password field.
 export async function readProton(uid) {
   if (location.origin !== 'https://mail.proton.me') return {ok:false, error:'请返回 Proton Mail 页面'};
   try {
@@ -116,6 +116,111 @@ export async function readLocalSessions(uid) {
     return {ok:true, sessions};
   } catch (e) {
     return {ok:false, error:e instanceof Error ? e.message : '读取本地会话映射失败'};
+  }
+}
+
+
+function base64Bytes(value) {
+  const raw = atob(String(value || ''));
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+function binaryBytesToString(bytes) {
+  let out = '';
+  const step = 0x4000;
+  for (let i = 0; i < bytes.length; i += step) {
+    out += String.fromCharCode(...bytes.subarray(i, i + step));
+  }
+  return out;
+}
+
+export async function readSessionKeyPassword(localID, uid) {
+  if (location.origin !== 'https://mail.proton.me') {
+    return {ok:false,error:'浏览器解密材料只能从 mail.proton.me 当前会话读取',stage:'origin'};
+  }
+  try {
+    const id = Number(localID);
+    if (!Number.isInteger(id) || id < 0) return {ok:false,error:'LocalID 无效',stage:'local-session'};
+    const raw = localStorage.getItem(`ps-${id}`);
+    if (!raw) return {ok:false,error:'未找到当前 LocalID 的持久会话',stage:'local-session'};
+    const persisted = JSON.parse(raw);
+    const persistedUid = typeof persisted?.UID === 'string' ? persisted.UID.trim() : '';
+    if (!persistedUid || persistedUid !== uid) {
+      return {ok:false,error:'持久会话 UID 与当前 Mail 会话不一致',stage:'local-session'};
+    }
+    const blob = typeof persisted?.blob === 'string' ? persisted.blob.trim() : '';
+    if (!blob) return {ok:false,error:'当前持久会话没有可用的加密解密材料',stage:'local-session'};
+    const payloadVersion = Number(persisted?.payloadVersion || 1);
+    if (![1,2,3].includes(payloadVersion)) {
+      return {ok:false,error:`不支持的持久会话 payloadVersion：${payloadVersion}`,stage:'local-session'};
+    }
+
+    const response = await fetch('/api/auth/v4/sessions/local/key', {
+      credentials:'same-origin',
+      cache:'no-store',
+      redirect:'error',
+      headers:{
+        accept:'application/json',
+        'x-pm-uid':uid,
+        'x-pm-appversion':'web-mail@5.0.133.5',
+        'x-pm-locale':'en_US'
+      },
+      signal:AbortSignal.timeout(15000)
+    });
+    let data = null;
+    try { data = await response.json(); } catch {}
+    const clientKey = typeof data?.ClientKey === 'string' ? data.ClientKey.trim() : '';
+    if (!response.ok || !clientKey) {
+      return {
+        ok:false,
+        error:`/auth/v4/sessions/local/key HTTP ${response.status}${data?.Code ? ` / Proton ${data.Code}` : ''}`,
+        stage:'local-key',
+        status:response.status,
+        protonCode:Number(data?.Code) || null
+      };
+    }
+
+    const keyBytes = base64Bytes(clientKey);
+    if (keyBytes.length !== 32) return {ok:false,error:'ClientKey 长度无效',stage:'decrypt'};
+    const key = await crypto.subtle.importKey('raw', keyBytes, {name:'AES-GCM'}, false, ['decrypt']);
+    const encrypted = base64Bytes(blob);
+    const ivLength = payloadVersion === 3 ? 12 : 16;
+    if (encrypted.length <= ivLength + 16) return {ok:false,error:'持久会话 blob 长度无效',stage:'decrypt'};
+    const iv = encrypted.slice(0, ivLength);
+    const ciphertext = encrypted.slice(ivLength);
+    const additionalData = payloadVersion >= 2 ? new TextEncoder().encode('session') : undefined;
+    const decrypted = new Uint8Array(await crypto.subtle.decrypt({
+      name:'AES-GCM',
+      iv,
+      ...(additionalData ? {additionalData} : {})
+    }, key, ciphertext));
+    const plain = payloadVersion === 3
+      ? new TextDecoder().decode(decrypted)
+      : binaryBytesToString(decrypted);
+    const parsed = JSON.parse(plain);
+    const keyPassword = typeof parsed?.keyPassword === 'string' ? parsed.keyPassword : '';
+    if (!keyPassword || keyPassword.length > 8192) {
+      return {ok:false,error:'持久会话未包含可用 keyPassword',stage:'decrypt'};
+    }
+    return {
+      ok:true,
+      keyPassword,
+      diagnostics:{
+        status:response.status,
+        protonCode:Number(data?.Code) || 1000,
+        payloadVersion,
+        localID:id
+      },
+      client:{mailAppVersion:'web-mail@5.0.133.5',locale:'en_US'}
+    };
+  } catch (e) {
+    return {
+      ok:false,
+      error:e instanceof Error ? e.message : '恢复浏览器解密材料失败',
+      stage:'exception'
+    };
   }
 }
 
