@@ -1,5 +1,5 @@
 import {PROTON, ACCOUNT, ADMIN, selectCookies, sessionState, sessionCandidates, bundleFor} from './core.js';
-import {readProton, readLocalSessions, readKeySalts, mcpRequest} from './bridge.js';
+import {readProton, readPersistedSessionUid, readLocalSessions, readKeySalts, mcpRequest} from './bridge.js';
 
 const $ = id => document.getElementById(id);
 let busy = false;
@@ -49,7 +49,7 @@ async function waitForTab(tabId, timeoutMs = 15000) {
   throw new Error('account.proton.me 页面加载超时');
 }
 
-async function withAccountTab(localId, fn) {
+async function withAccountTab(localId, expectedUid, fn) {
   const expectedPrefix = localId ? `/u/${localId}/` : null;
   const targetUrl = localId ? `${ACCOUNT}/u/${localId}/mail` : ACCOUNT + '/mail';
   const tabs = await chrome.tabs.query({url:ACCOUNT + '/*'});
@@ -71,6 +71,17 @@ async function withAccountTab(localId, fn) {
     logEvent('KeySalt', 'Account 页面已就绪', {expectedLocalID:localId || 'none',actualLocalID:actualLocalId || 'none'});
     if (localId && actualLocalId !== localId) {
       throw new Error(`Account LocalID 不匹配：期望 ${localId}，实际 ${actualLocalId || '无'}`);
+    }
+    if (localId !== null && localId !== undefined) {
+      const persisted = await runIn(tab.id, readPersistedSessionUid, [Number(localId)]);
+      if (persisted.ok) {
+        logEvent('KeySalt', 'Account 持久会话 UID', {localID:localId,uid:uidSuffix(persisted.uid)});
+        if (expectedUid && persisted.uid !== expectedUid) {
+          throw new Error(`Account 当前 LocalID 对应其他 UID：${uidSuffix(persisted.uid)}`);
+        }
+      } else {
+        logEvent('KeySalt', 'Account 持久会话 UID 不可用', {localID:localId});
+      }
     }
     return await fn(tab.id);
   } finally {
@@ -138,7 +149,7 @@ async function captureBundle(uid, updateUi = false) {
 
   let salts;
   try {
-    salts = await withAccountTab(localId, tabId => runIn(tabId, readKeySalts, [uid]));
+    salts = await withAccountTab(localId, uid, tabId => runIn(tabId, readKeySalts, [uid]));
     if (!salts.ok) {
       logEvent('KeySalt', '获取失败', {
         uid:uidSuffix(uid),
@@ -291,29 +302,43 @@ async function detect() {
   let selectedUid = candidates[0].uid;
   let selectionMode = 'latest-fallback';
   if (mailLocalId !== null) {
-    const mapping = await runIn(selectedTab, readLocalSessions, [candidates[0].uid]);
-    if (mapping.ok) {
-      const exact = mapping.sessions.find(item => String(item.localID) === String(mailLocalId));
-      if (exact && candidates.some(item => item.uid === exact.uid)) {
-        selectedUid = exact.uid;
-        selectionMode = 'localid';
-        logEvent('会话映射', 'LocalID 精确匹配 UID', {
-          localID:mailLocalId,
-          uid:uidSuffix(selectedUid),
-          sessions:mapping.sessions.length
-        });
+    const persisted = await runIn(selectedTab, readPersistedSessionUid, [Number(mailLocalId)]);
+    if (persisted.ok && candidates.some(item => item.uid === persisted.uid)) {
+      selectedUid = persisted.uid;
+      selectionMode = 'persisted-localid';
+      logEvent('会话映射', 'ps-LocalID 精确匹配 UID', {
+        localID:mailLocalId,
+        uid:uidSuffix(selectedUid)
+      });
+    } else {
+      logEvent('会话映射', 'ps-LocalID 映射不可用，尝试 API 映射', {
+        localID:mailLocalId,
+        persisted:persisted.ok ? uidSuffix(persisted.uid) : 'none'
+      });
+      const mapping = await runIn(selectedTab, readLocalSessions, [candidates[0].uid]);
+      if (mapping.ok) {
+        const exact = mapping.sessions.find(item => String(item.localID) === String(mailLocalId));
+        if (exact && candidates.some(item => item.uid === exact.uid)) {
+          selectedUid = exact.uid;
+          selectionMode = 'api-localid';
+          logEvent('会话映射', 'API LocalID 精确匹配 UID', {
+            localID:mailLocalId,
+            uid:uidSuffix(selectedUid),
+            sessions:mapping.sessions.length
+          });
+        } else {
+          logEvent('会话映射', 'API 未找到 LocalID 对应 UID，回退最新会话', {
+            localID:mailLocalId,
+            remoteSessions:mapping.sessions.length
+          });
+        }
       } else {
-        logEvent('会话映射', '未找到可用的 LocalID 对应 UID，回退最新会话', {
+        logEvent('会话映射', 'API 映射读取失败，回退最新会话', {
           localID:mailLocalId,
-          remoteSessions:mapping.sessions.length
+          status:mapping.status || 'n/a',
+          protonCode:mapping.protonCode || 'n/a'
         });
       }
-    } else {
-      logEvent('会话映射', '读取失败，回退最新会话', {
-        localID:mailLocalId,
-        status:mapping.status || 'n/a',
-        protonCode:mapping.protonCode || 'n/a'
-      });
     }
   }
 
@@ -324,17 +349,17 @@ async function detect() {
   });
   $('proton').replaceChildren(...ordered.map((item,i) =>
     new Option(`${item.uid===selectedUid
-      ? (selectionMode==='localid'?'当前页面会话':'最新会话')
+      ? (selectionMode!=='latest-fallback'?'当前页面会话':'最新会话')
       : '其他会话 '+(i+1)} · UID …${item.uid.slice(-6)}`,item.uid)
   ));
   $('proton').disabled = false;
   $('proton').value = selectedUid;
-  logEvent('检测', selectionMode==='localid'?'默认选择当前页面会话':'默认选择最新会话', {
+  logEvent('检测', selectionMode!=='latest-fallback'?'默认选择当前页面会话':'默认选择最新会话', {
     uid:uidSuffix(selectedUid),
     candidates:candidates.length,
     localID:mailLocalId || 'none'
   });
-  $('status').textContent = selectionMode === 'localid'
+  $('status').textContent = selectionMode !== 'latest-fallback'
     ? `已按 LocalID ${mailLocalId} 选择当前页面会话。`
     : (candidates.length > 1
       ? `检测到 ${candidates.length} 个会话，LocalID 映射不可用，已回退最新会话。`

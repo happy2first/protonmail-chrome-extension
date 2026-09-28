@@ -1,4 +1,4 @@
-// Runs only in Chrome's ISOLATED world. Never reads page storage or password fields.
+// Runs only in Chrome's ISOLATED world. Reads only the ps-<LocalID>.UID mapping from Proton storage; never reads password fields.
 export async function readProton(uid) {
   if (location.origin !== 'https://mail.proton.me') return {ok:false, error:'请返回 Proton Mail 页面'};
   try {
@@ -38,6 +38,21 @@ export async function readProton(uid) {
     };
   } catch (e) {
     return {ok:false, error:e instanceof Error ? e.message : 'Proton 检测失败'};
+  }
+}
+
+export function readPersistedSessionUid(localID) {
+  try {
+    const id = Number(localID);
+    if (!Number.isInteger(id) || id < 0) return {ok:false,error:'LocalID 无效'};
+    const raw = localStorage.getItem(`ps-${id}`);
+    if (!raw) return {ok:false,error:'未找到当前 LocalID 的持久会话'};
+    const parsed = JSON.parse(raw);
+    const uid = typeof parsed?.UID === 'string' ? parsed.UID.trim() : '';
+    if (!uid) return {ok:false,error:'持久会话中没有 UID'};
+    return {ok:true,uid};
+  } catch (e) {
+    return {ok:false,error:e instanceof Error ? e.message : '读取持久会话 UID 失败'};
   }
 }
 
