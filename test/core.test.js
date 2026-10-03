@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {selectCookies,sessionState,sessionCandidates,refreshAvailable,bundleFor} from '../extension/core.js';
+import {selectCookies,sessionState,sessionCandidates,refreshAvailable,bundleFor,bundleForAccount} from '../extension/core.js';
 import {readProton,readPersistedSessionUid,readPersistedSessionIndex,readLocalSessions,readSessionKeyPassword,readKeySalts,mcpRequest} from '../extension/bridge.js';
 
 const cookie = (name='AUTH-one',extra={}) => ({
@@ -15,6 +15,14 @@ const cookie = (name='AUTH-one',extra={}) => ({
   sameSite:'lax',
   session:true,
   ...extra
+});
+
+test('account binding accepts a verified alias and rejects unrelated targets',()=>{
+  const bundle={email:'main@proton.me',addresses:[{id:'a',email:'main@proton.me'},{id:'b',email:'alias@proton.me'}]};
+  assert.equal(bundleForAccount(bundle,{email:' ALIAS@proton.me '}).email,'alias@proton.me');
+  assert.equal(bundle.email,'main@proton.me');
+  assert.throws(()=>bundleForAccount(bundle,{email:'wrong@proton.me'}),/不属于/);
+  assert.throws(()=>bundleForAccount(bundle,{email:''}),/不属于/);
 });
 
 test('select one account and require AUTH, REFRESH and Session-Id',()=>{
@@ -126,7 +134,7 @@ test('manifest contains minimal permissions and account origin host permission',
   const root=new URL('../extension/',import.meta.url);
   const manifest=JSON.parse(readFileSync(new URL('manifest.json',root),'utf8'));
   assert.equal(manifest.manifest_version,3);
-  assert.equal(manifest.version,'0.4.0');
+  assert.equal(manifest.version,JSON.parse(readFileSync(new URL('../package.json', root),'utf8')).version);
   assert.deepEqual(manifest.permissions,['cookies','scripting']);
   assert.deepEqual(manifest.host_permissions,[
     'https://proton.me/*',

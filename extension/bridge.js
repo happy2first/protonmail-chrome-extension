@@ -120,26 +120,29 @@ export async function readLocalSessions(uid) {
 }
 
 
-function base64Bytes(value) {
-  const raw = atob(String(value || ''));
-  const out = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i += 1) out[i] = raw.charCodeAt(i);
-  return out;
-}
-
-function binaryBytesToString(bytes) {
-  let out = '';
-  const step = 0x4000;
-  for (let i = 0; i < bytes.length; i += step) {
-    out += String.fromCharCode(...bytes.subarray(i, i + step));
-  }
-  return out;
-}
-
 export async function readSessionKeyPassword(localID, uid) {
+  // executeScript serializes ONLY this function, not its module/closure.
+  // Keep every helper inside the injected function.
+  function base64Bytes(value) {
+    const raw = atob(String(value || ''));
+    const out = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i += 1) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+
+  function binaryBytesToString(bytes) {
+    let out = '';
+    const step = 0x4000;
+    for (let i = 0; i < bytes.length; i += step) {
+      out += String.fromCharCode(...bytes.subarray(i, i + step));
+    }
+    return out;
+  }
+
   if (location.origin !== 'https://mail.proton.me') {
     return {ok:false,error:'浏览器解密材料只能从 mail.proton.me 当前会话读取',stage:'origin'};
   }
+  let stage = 'local-session';
   try {
     const id = Number(localID);
     if (!Number.isInteger(id) || id < 0) return {ok:false,error:'LocalID 无效',stage:'local-session'};
@@ -157,6 +160,7 @@ export async function readSessionKeyPassword(localID, uid) {
       return {ok:false,error:`不支持的持久会话 payloadVersion：${payloadVersion}`,stage:'local-session'};
     }
 
+    stage = 'local-key';
     const response = await fetch('/api/auth/v4/sessions/local/key', {
       credentials:'same-origin',
       cache:'no-store',
@@ -172,7 +176,7 @@ export async function readSessionKeyPassword(localID, uid) {
     let data = null;
     try { data = await response.json(); } catch {}
     const clientKey = typeof data?.ClientKey === 'string' ? data.ClientKey.trim() : '';
-    if (!response.ok || !clientKey) {
+    if (!response.ok || data?.Code !== 1000 || !clientKey) {
       return {
         ok:false,
         error:`/auth/v4/sessions/local/key HTTP ${response.status}${data?.Code ? ` / Proton ${data.Code}` : ''}`,
@@ -182,6 +186,7 @@ export async function readSessionKeyPassword(localID, uid) {
       };
     }
 
+    stage = 'decrypt';
     const keyBytes = base64Bytes(clientKey);
     if (keyBytes.length !== 32) return {ok:false,error:'ClientKey 长度无效',stage:'decrypt'};
     const key = await crypto.subtle.importKey('raw', keyBytes, {name:'AES-GCM'}, false, ['decrypt']);
@@ -199,6 +204,7 @@ export async function readSessionKeyPassword(localID, uid) {
     const plain = payloadVersion === 3
       ? new TextDecoder().decode(decrypted)
       : binaryBytesToString(decrypted);
+    stage = 'parse';
     const parsed = JSON.parse(plain);
     const keyPassword = typeof parsed?.keyPassword === 'string' ? parsed.keyPassword : '';
     if (!keyPassword || keyPassword.length > 8192) {
@@ -215,11 +221,12 @@ export async function readSessionKeyPassword(localID, uid) {
       },
       client:{mailAppVersion:'web-mail@5.0.133.5',locale:'en_US'}
     };
-  } catch (e) {
+  } catch {
     return {
       ok:false,
-      error:e instanceof Error ? e.message : '恢复浏览器解密材料失败',
-      stage:'exception'
+      // JSON.parse errors may contain part of the secret input. Never return them.
+      error:`恢复浏览器解密材料失败（${stage}），请刷新 Proton 页面后重新检测`,
+      stage
     };
   }
 }

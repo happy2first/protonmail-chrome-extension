@@ -9,7 +9,7 @@
 - 沿用现有 Cloudflare Access、`PROTON_SESSIONS` Durable Object 和 `PROTON_SESSION_KEY`。
 - 不添加新 Secret、KV、D1、绑定或外部 CORS 白名单，也不删除重建 Worker。
 - 必须已有目标 Proton 账号配置；检测出的邮箱应与该账号配置的邮箱一致。
-- 扩展导入不等于免密码解密：读取正文仍依赖服务端原有的解密配置。不要把 Proton 密码填进扩展。
+- 服务端需支持 Bundle v3。正常路径用导入的派生 `keyPassword` 解锁私钥；仅 KeySalt 兼容路径仍依赖服务端密码配置。不要把 Proton 密码填进扩展。
 
 ## 本地加载（无需构建、无需 npm install）
 
@@ -19,9 +19,9 @@
 4. 选择仓库内 **extension** 文件夹（里面直接有 `manifest.json`），不要选仓库根目录。
 5. 使用普通窗口登录 `https://mail.proton.me`。
 6. 打开 `https://mail.mcp.happyfirst.top/proton/import` 并完成 Cloudflare Access 登录。部署过服务端更新后刷新此页。保持页面打开。
-7. 切回 Proton 标签页，点击扩展图标。扩展会按实际 Proton API URL 读取 Cookie，并从当前 Proton 页面自己的 `ps-<LocalID>` 持久会话记录中只读取 `UID` 字段来精确确定 `/u/<LocalID>/...` 对应的会话；不会读取或上传其中的加密 `blob`。如果该映射不可用，才调用 `GET /api/auth/v4/sessions/local`，最后才回退到按 `AUTH-*` 到期时间选择最新会话。
+7. 切回 Proton 标签页，点击扩展图标。扩展会按实际 Proton API URL 读取 Cookie，并从当前 Proton 页面自己的 `ps-<LocalID>` 持久会话记录中只读取 `UID` 字段来精确确定 `/u/<LocalID>/...` 对应的会话；会话映射阶段不读取 `blob`；下一步仅在内存中解密它，不上传原始 blob。如果该映射不可用，才调用 `GET /api/auth/v4/sessions/local`，最后才回退到按 `AUTH-*` 到期时间选择最新会话。
 8. AUTH、REFRESH、Session-Id 就绪后，扩展读取当前 `ps-<LocalID>` 的加密持久会话 blob，并通过当前 Mail Session 请求 `GET /api/auth/v4/sessions/local/key` 获取 `ClientKey`。扩展仅在内存中用 AES-GCM 解密 blob，提取 Proton 已派生的 `keyPassword`；不会读取用户原始登录密码。若该流程失败，才回退到原 KeySalt 兼容路径。
-9. 选择对应 MCP 账号，点击“预览并连接”。扩展会先显示 Proton 邮箱、目标 MCP 账号、UID、Cookie 名称和解密材料状态；此时尚未发起配对或上传 Bundle。预览 JSON 不显示 `keyPassword`。
+9. 扩展只列出邮箱属于当前 Proton 会话的 MCP 账号（包括别名地址）。选择对应 MCP 账号，点击“预览并连接”。扩展会先显示 Proton 邮箱、目标 MCP 账号、UID、Cookie 名称和解密材料状态；此时尚未发起配对或上传 Bundle。预览 JSON 不显示 `keyPassword`。
 10. 如需留档或排障，可在确认窗口点击“导出 JSON”。导出文件包含 Session Cookie，但主动排除 `keyPassword`；仍应按敏感凭证保管。
 11. 核对无误后点击“确认导入”。只有此时扩展才创建一次性配对并上传 Bundle。**导入过程中保持 Popup 打开**。
 12. 成功后在 MCP 管理页刷新状态。扩展不会在导入阶段主动 refresh；需要验证实际续期时使用管理页“测试续期”。
@@ -41,8 +41,29 @@
 
 ## 测试
 
-Node.js 20+：`npm test`。测试使用虚构 Cookie，不连接真实邮箱。GitHub Actions 执行测试、语法检查并产出 unpacked 文件。
+Node.js 20+：`npm test`。测试使用虚构 Cookie，不连接真实邮箱。解密回归会把注入函数序列化后放入全新上下文运行，避免模块内直接调用掩盖 Chrome 注入时丢失依赖的问题。
 
-已在开发环境通过扩展单元测试、服务端配对/导入测试、原有后端完整测试与 Workers dry-run（最终结果见提交说明）。真实浏览器安装与真实 Proton Session 导入需按上述步骤在桌面验证，未声称通过云端端到端测试。
+真实 Chromium 扩展回归（仅开发/CI 需要安装依赖；使用扩展仍然无需构建）：
+
+```sh
+npm ci
+npx playwright install --with-deps chromium
+npm run test:browser
+```
+
+浏览器测试使用临时 profile 加载真实 unpacked MV3 扩展，所有网页/API 请求由测试拦截并返回虚构数据，不访问真实 Proton/MCP。覆盖 HttpOnly 父域 Cookie、三种加密格式、预览确认、多账号/别名、会话更新、检测失败和 KeySalt fallback。GitHub Actions 必须通过单元测试、语法检查和浏览器测试后才产出 unpacked 文件。
+
+0.4.1 已通过扩展单元测试与 Chromium 134 的真实扩展回归（虚构会话/API）。已核对配套服务端当前源码的 Bundle v3 接口；这些验证不能证明线上 Worker 已部署同一版本，也不代替真实账号导入测试。
+
+升级时用最新代码替换本地扩展目录，并在 `chrome://extensions` / `edge://extensions` 点击“重新加载”，确认版本 **0.4.1**。刷新已登录的 Proton Mail 和 MCP 管理页，再切回 Mail 点击扩展。导入成功后，管理页应显示浏览器解密材料已导入；再测试读取一封真实邮件正文。
 
 手动验收：未登录提示、Mail `ps-<LocalID>`→UID 精确会话选择、`/auth/v4/sessions/local/key` 获取、持久会话 AES-GCM 解密、派生 `keyPassword` 恢复、KeySalt fallback、Session-Id、导入前预览、确认前不上传、导出 JSON 不含 `keyPassword`、成功导入后管理页状态。Popup 提供“诊断日志”，仅显示步骤、HTTP 状态、Proton Code、LocalID 和 UID 尾号，不记录 Cookie 值、RefreshToken、KeySalt 或密码。除用户主动导出的 JSON 外，不应留下本地敏感存储。
+
+## 0.4.1 审查修复
+
+- 修复 `readSessionKeyPassword` 注入后丢失 `base64Bytes` / `binaryBytesToString` 模块依赖，原版本会误入 KeySalt fallback。
+- 按选中 UID 查找 Mail 持久会话 LocalID，避免手动切换会话时仍读取 URL 对应的另一个账号；缺少持久会话时正确进入兼容路径。
+- 按真实地址列表匹配目标 MCP 账号；配对使用该账号配置的邮箱，兼容主邮箱之外的别名。
+- 收集 API 信息后重新读取 Cookie；确认前检查凭证是否变化和预览是否过期，避免上传已轮换的快照。
+- 修复失败或导入成功后按钮被统一收尾逻辑重新启用；配对与上传固定在同一管理标签页。
+- 检查 local/key 的 Proton Code；解密/JSON 解析失败只返回安全的阶段信息，不将可能含秘密内容的解析异常写入日志。

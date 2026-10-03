@@ -59,6 +59,15 @@ export function refreshAvailable(cookies, uid) {
   return sessionState(cookies, uid).ready;
 }
 
+export function bundleForAccount(bundle, account) {
+  const email = String(account.email || '').trim().toLowerCase();
+  if (!email || !bundle.addresses.some(a => a.email.toLowerCase() === email)) {
+    throw new Error('所选 MCP 账号邮箱不属于当前 Proton 会话，请选择对应账号');
+  }
+  // The pairing endpoint requires the configured address, which may be an alias.
+  return {...bundle, email};
+}
+
 export function sessionCandidates(rows, now = Date.now()) {
   const byUid = new Map();
   for (const c of rows || []) {

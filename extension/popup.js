@@ -1,4 +1,4 @@
-import {PROTON, ACCOUNT, ADMIN, selectCookies, sessionState, sessionCandidates, bundleFor} from './core.js';
+import {PROTON, ACCOUNT, ADMIN, selectCookies, sessionState, sessionCandidates, bundleFor, bundleForAccount} from './core.js';
 import {readProton, readPersistedSessionUid, readPersistedSessionIndex, readLocalSessions, readSessionKeyPassword, readKeySalts, mcpRequest} from './bridge.js';
 
 const $ = id => document.getElementById(id);
@@ -7,6 +7,7 @@ let selectedTab = null;
 let storeId = null;
 let pendingImport = null;
 let diagnosticLog = [];
+let ready = false;
 
 function uidSuffix(uid) {
   const value = String(uid || '');
@@ -149,8 +150,8 @@ async function adminTab() {
   return tab.id;
 }
 
-async function callMcp(operation, payload) {
-  const result = await runIn(await adminTab(), mcpRequest, [operation,payload ?? null]);
+async function callMcp(operation, payload, tabId = null) {
+  const result = await runIn(tabId ?? await adminTab(), mcpRequest, [operation,payload ?? null]);
   if (!result.ok) throw new Error(result.error);
   return result.data;
 }
@@ -184,7 +185,11 @@ async function captureBundle(uid, updateUi = false) {
 
   const cookies = selectCookies(rows, uid);
   const mailTab = await chrome.tabs.get(selectedTab);
-  const localId = localIdFromUrl(mailTab.url);
+  const pageLocalId = localIdFromUrl(mailTab.url);
+  const index = await runIn(selectedTab, readPersistedSessionIndex, []);
+  const matching = (index.sessions || []).filter(item => item.uid === uid);
+  const session = matching.find(item => String(item.localID) === pageLocalId) || matching[0];
+  const localId = session ? String(session.localID) : null;
   logEvent('Session', 'Cookie 材料就绪', {
     uid:uidSuffix(uid),
     localID:localId || 'none',
@@ -202,9 +207,10 @@ async function captureBundle(uid, updateUi = false) {
   let salts = {keySalts:[],client:{}};
   let keyMaterialSource = '';
   try {
-    if (localId === null) throw new Error('当前 Mail URL 缺少 LocalID，无法恢复浏览器解密材料');
     logEvent('解密材料', '从当前 Mail 持久会话恢复', {uid:uidSuffix(uid),localID:localId});
-    const recovered = await runIn(selectedTab, readSessionKeyPassword, [Number(localId), uid]);
+    const recovered = localId === null
+      ? {ok:false,stage:'local-session',error:'未找到所选 UID 的 Mail 持久会话'}
+      : await runIn(selectedTab, readSessionKeyPassword, [Number(localId), uid]);
     if (recovered.ok) {
       keyPassword = recovered.keyPassword;
       keyMaterialSource = 'browser-key-password';
@@ -256,7 +262,9 @@ async function captureBundle(uid, updateUi = false) {
     keyMaterialSource,
     client:{...(mail.client || {}),...(salts.client || {})}
   };
-  const bundle = bundleFor(uid, cookies, result);
+  // Proton may rotate cookies while the API calls above are in flight.
+  const freshCookies = selectCookies(await currentCookies(), uid);
+  const bundle = bundleFor(uid, freshCookies, result);
   if (updateUi) {
     $('email').textContent = result.email;
     $('salt').textContent = '已获取';
@@ -340,6 +348,9 @@ function exportPending() {
 }
 
 async function inspect() {
+  ready = false;
+  clearPreview();
+  $('account').replaceChildren();
   $('connect').disabled = true;
   const uid = $('proton').value;
   if (!uid) throw new Error('请选择 Proton 会话');
@@ -348,20 +359,24 @@ async function inspect() {
 
   const bundle = await captureBundle(uid, true);
   const data = await callMcp('accounts');
-  $('account').replaceChildren(...data.accounts.map(a => {
+  const matchingAccounts = data.accounts.filter(a => bundle.addresses.some(address =>
+    address.email.toLowerCase() === String(a.email || '').trim().toLowerCase()));
+  $('account').replaceChildren(...matchingAccounts.map(a => {
     const option = new Option(`${a.label} · ${a.email}`, a.id);
     option.dataset.label = a.label;
     option.dataset.email = a.email;
     return option;
   }));
-  $('account').disabled = false;
-  $('connect').disabled = !data.accounts.length;
-  $('status').textContent = data.accounts.length
+  ready = matchingAccounts.length > 0;
+  $('account').disabled = !ready;
+  $('connect').disabled = !ready;
+  $('status').textContent = ready
     ? `已就绪：Bundle v${bundle.version}。点击“预览并连接”核对后导入。`
-    : 'MCP 尚未配置 Proton 账号';
+    : 'MCP 中没有与当前 Proton 邮箱匹配的账号，请检查服务端账号配置';
 }
 
 async function detect() {
+  ready = false;
   clearPreview();
   $('connect').disabled = true;
   $('email').textContent = '待检测';
@@ -462,7 +477,7 @@ async function previewImport() {
   const uid = $('proton').value;
   if (!uid) throw new Error('请选择 Proton 会话');
   const account = accountMeta();
-  const bundle = await captureBundle(uid, true);
+  const bundle = bundleForAccount(await captureBundle(uid, true), account);
   showPreview(bundle, account);
 }
 
@@ -472,22 +487,34 @@ async function confirmImport() {
   $('previewDialog').close();
   $('status').textContent = '正在导入…';
   try {
+    if (Date.now() - pending.bundle.capturedAt > 14 * 60 * 1000) {
+      throw new Error('预览已过期，请重新预览后导入');
+    }
+    const current = selectCookies(await currentCookies(), pending.bundle.uid);
+    const credentialRows = rows => rows.filter(c => /^(AUTH-|REFRESH-|Session-Id$)/.test(c.name))
+      .map(c => JSON.stringify([c.name,c.domain,c.path,c.value])).sort();
+    if (JSON.stringify(credentialRows(current)) !== JSON.stringify(credentialRows(pending.bundle.session.cookies))) {
+      throw new Error('Proton 会话已更新，请重新预览后导入');
+    }
+    // Keep pair/import on the same authenticated management document.
+    const targetTab = await adminTab();
     const pair = await callMcp('pair',{
       account:pending.account.id,
       uid:pending.bundle.uid,
       email:pending.bundle.email
-    });
-    if (!pair.token || pair.expiresAt <= Date.now()) throw new Error('配对响应无效');
+    }, targetTab);
+    if (!pair.token || !Number.isFinite(pair.expiresAt) || pair.expiresAt <= Date.now()) throw new Error('配对响应无效');
     const response = await callMcp('import',{
       account:pending.account.id,
       token:pair.token,
       bundle:pending.bundle
-    });
+    }, targetTab);
     if (!response.success) throw new Error('导入未确认，请查看管理页');
     $('status').textContent = response.refreshTestRequired
       ? '导入成功。建议到管理页执行一次“测试续期”。'
       : '导入成功。';
     $('connect').disabled = true;
+    ready = false;
   } finally {
     pendingImport = null;
     $('previewJson').textContent = '';
@@ -501,6 +528,7 @@ async function act(fn) {
   try {
     await fn();
   } catch (e) {
+    ready = false;
     const message = e instanceof Error ? e.message : '操作失败，请重新检测';
     logEvent('错误', message);
     $('status').textContent = message;
@@ -511,7 +539,7 @@ async function act(fn) {
     $('login').disabled = false;
     $('proton').disabled = !$('proton').options.length;
     $('account').disabled = !$('account').options.length;
-    $('connect').disabled = !$('account').options.length || !$('proton').value;
+    $('connect').disabled = !ready;
     $('closePreview').disabled = false;
     $('cancelPreview').disabled = false;
     $('exportBundle').disabled = !pendingImport;
