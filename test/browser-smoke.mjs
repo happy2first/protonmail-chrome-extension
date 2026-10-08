@@ -2,14 +2,22 @@
 // disposable browser profile. No live Proton/MCP requests or credentials.
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdtemp, rm, cp, readFile, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium} from 'playwright';
 import {sessionFixture} from './session-fixture.js';
 
-const extension = fileURLToPath(new URL('../extension', import.meta.url));
+const sourceExtension = fileURLToPath(new URL('../extension', import.meta.url));
+const fixtureRoot = await mkdtemp(join(tmpdir(), 'proton-extension-fixture-'));
+const extension = join(fixtureRoot,'extension');
+await cp(sourceExtension,extension,{recursive:true});
+// Test-only pregrant for this offline origin: do not automate Chrome's permission
+// prompt. Production retains only optional MCP hosts requested by a user click.
+const manifest = JSON.parse(await readFile(join(extension,'manifest.json'),'utf8'));
+manifest.host_permissions.push('https://mail.example.test/*','https://other.example.test/*');
+await writeFile(join(extension,'manifest.json'),JSON.stringify(manifest));
 const id = [...createHash('sha256').update(extension).digest('hex').slice(0,32)]
   .map(c => String.fromCharCode(97 + parseInt(c,16))).join('');
 const profile = await mkdtemp(join(tmpdir(), 'proton-extension-test-'));
@@ -39,7 +47,7 @@ try {
     const request = route.request();
     const url = new URL(request.url());
     if (url.protocol === 'chrome-extension:') return route.continue();
-    if (!['https://mail.proton.me','https://account.proton.me','https://mail.mcp.happyfirst.top'].includes(url.origin)) {
+    if (!['https://mail.proton.me','https://account.proton.me','https://mail.example.test'].includes(url.origin)) {
       return route.abort();
     }
     const path = url.pathname;
@@ -66,15 +74,15 @@ try {
       {id:'wrong',label:'Wrong account first',email:'wrong@proton.me'},
       ...(!accountsMismatch ? [{id:'alias',label:'Matching alias',email:'al***s@proton.me'},{id:'nine',label:'Other account',email:'ni***e@proton.me'}] : [])
     ]});
-    if (path === '/proton/import/api/extension-pair') return json(route, {token:'TEST-ONLY-pair',expiresAt:Date.now()+300000});
-    if (path === '/proton/import/api/extension-import') return json(route, {success:true,refreshTestRequired:true});
+    if (path === '/proton/import/api/extension-pair') return json(route, {ok:true,data:{token:'TEST-ONLY-pair',expiresAt:String(Date.now()+300000)}});
+    if (path === '/proton/import/api/extension-import') return json(route, {ok:true,data:{success:true,refreshTestRequired:true}});
     return route.abort();
   });
   await context.addCookies([...cookieRows('uid-seven'),...cookieRows('uid-nine'),
     {name:'Session-Id',value:'TEST-ONLY-session',domain:'.proton.me',path:'/'}]
     .map(c=>({...c,httpOnly:true,secure:true,sameSite:'Lax'})));
   const admin = await context.newPage();
-  await admin.goto('https://mail.mcp.happyfirst.top/proton/import');
+  await admin.goto('https://mail.example.test/proton/import');
   const mail = await context.newPage();
   await mail.goto('https://mail.proton.me/u/7/inbox');
   const setSessions = async () => mail.evaluate(({a,b}) => {
@@ -98,6 +106,18 @@ try {
     assert.equal(await popup.locator('#connect').isEnabled(),true,await popup.locator('#status').textContent());
   };
 
+  await popup.goto(`chrome-extension://${id}/popup.html`);
+  await popup.waitForFunction(()=>document.getElementById('status').textContent.includes('首次使用'));
+  assert.equal(await popup.locator('#serviceOrigin').inputValue(),'');
+  assert.equal(requests.length,0);
+  assert.equal(await popup.locator('#login').isEnabled(),false);
+  await popup.fill('#serviceOrigin','https://mail.example.test/proton/import');
+  await clickAndWait('#saveService');
+  assert.equal(await popup.locator('#serviceOrigin').inputValue(),'https://mail.example.test');
+  const stored = await popup.evaluate(()=>chrome.storage.local.get(null));
+  assert.deepEqual(stored,{mcpOrigin:'https://mail.example.test'});
+  console.log('PASS: first use is unconfigured, only chosen service origin is stored');
+
   for (const version of [1,2,3]) {
     fixture = await sessionFixture(version);
     await setSessions();
@@ -110,6 +130,8 @@ try {
     const preview = await popup.locator('#previewJson').textContent();
     assert.equal(preview.includes(fixture.keyPassword),false);
     assert.equal(JSON.parse(preview).bundle.email,alias);
+    assert.equal(JSON.parse(preview).target.serviceOrigin,'https://mail.example.test');
+    assert.equal(await popup.locator('#previewService').textContent(),'https://mail.example.test');
     assert.equal(requests.filter(r=>r.path.includes('extension-')).length,writesBefore);
     await clickAndWait('#confirmImport');
     assert.match(await popup.locator('#status').textContent(),/导入成功/);
@@ -177,9 +199,20 @@ try {
   await popup.click('#cancelPreview');
   assert.equal(await popup.locator('#previewJson').textContent(),'');
   console.log('PASS: absent local material falls back; cancellation clears preview');
+  // Changing the configured destination must disable import until detection,
+  // and persist only the new public origin.
+  await popup.locator('#serviceSettings > summary').click();
+  await popup.fill('#serviceOrigin','https://other.example.test');
+  await clickAndWait('#saveService');
+  assert.equal(await popup.locator('#connect').isEnabled(),false);
+  assert.equal(await popup.locator('#account option').count(),0);
+  assert.equal(await popup.locator('#previewJson').textContent(),'');
+  assert.deepEqual(await popup.evaluate(()=>chrome.storage.local.get(null)),{mcpOrigin:'https://other.example.test'});
+  console.log('PASS: changing destination invalidates selection and preview');
   assert.deepEqual(errors,[]);
 } finally {
   await context.close();
   await rm(profile,{recursive:true,force:true});
+  await rm(fixtureRoot,{recursive:true,force:true});
 }
 

@@ -2,7 +2,7 @@
 
 仓库：`happy2first/personal-mail-mcp`。服务端新增 `src/proton/extension-policy.js`、`src/proton/extension-session.js`；`src/entry.js` 加载扩展处理器；`import-page.js` 提供 CSRF meta、配对与导入路由。管理页仅保留当前高级手工故障排查流程：普通 Session Cookie + 专用 REFRESH Cookie + KeySalt JSON；旧 Session JSON / 旧 REFRESH-* 兼容导入及其通用 `/api/import` 入口已移除。
 
-现有 `/proton/import` 仍必须通过 Cloudflare Access。扩展在该页面的隔离上下文读取 `meta[name=proton-extension-csrf]`，沿用 HttpOnly 双提交 CSRF Cookie。普通跨站请求不放行；不为扩展添加 Access bypass。
+用户配置的服务地址下的 `/proton/import` 仍必须通过 Cloudflare Access。扩展在该页面的隔离上下文读取 `meta[name=proton-extension-csrf]`，沿用 HttpOnly 双提交 CSRF Cookie。普通跨站请求不放行；不为扩展添加 Access bypass。
 
 ## Browser Session Bundle v3
 
@@ -72,3 +72,8 @@ npx wrangler deploy --dry-run --outdir dist
 ```
 
 部署无需 Durable Object 迁移、无需新增 KV/D1/Secret。回滚服务端会使扩展提示配对接口未就绪；原手工导入页仍保留。
+
+
+## 可配置服务地址（扩展 0.4.3+）
+
+首次使用必须配置 HTTPS 服务地址，扩展只申请该站点的可选主机权限，并在注入请求时核对配置的 origin 与 `/proton/import` 路径。管理页、账号查询、配对及上传使用同一地址。变更地址会使旧预览失效。扩展兼容直接 JSON 和 `{ok:true,data:...}` 成功包装，仍拒绝业务失败；`expiresAt` 必须是未来的毫秒时间戳（数字或数字字符串）。不支持子路径部署。

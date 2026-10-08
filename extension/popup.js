@@ -1,4 +1,4 @@
-import {PROTON, ACCOUNT, ADMIN, selectCookies, sessionState, sessionCandidates, bundleFor, bundleForAccount, matchingAccounts} from './core.js';
+import {PROTON, ACCOUNT, normalizeMcpOrigin, normalizePairResponse, selectCookies, sessionState, sessionCandidates, bundleFor, bundleForAccount, matchingAccounts} from './core.js';
 import {readProton, readPersistedSessionUid, readPersistedSessionIndex, readLocalSessions, readSessionKeyPassword, readKeySalts, mcpRequest} from './bridge.js';
 
 const $ = id => document.getElementById(id);
@@ -8,6 +8,8 @@ let storeId = null;
 let pendingImport = null;
 let diagnosticLog = [];
 let ready = false;
+let mcpOrigin = '';
+const adminUrl = () => mcpOrigin + '/proton/import';
 
 function uidSuffix(uid) {
   const value = String(uid || '');
@@ -144,14 +146,15 @@ async function withAccountTab(expectedUid, fn) {
 }
 
 async function adminTab() {
-  const tabs = await chrome.tabs.query({url:ADMIN + '*'});
-  const tab = tabs.find(t => new URL(t.url).pathname === '/proton/import');
+  if (!mcpOrigin) throw new Error('请先配置 MCP 服务地址');
+  const tabs = await chrome.tabs.query({url:adminUrl() + '*'});
+  const tab = tabs.find(t => new URL(t.url).origin === mcpOrigin && new URL(t.url).pathname === '/proton/import');
   if (!tab) throw new Error('请先打开 MCP 管理页并完成 Access 登录');
   return tab.id;
 }
 
 async function callMcp(operation, payload, tabId = null) {
-  const result = await runIn(tabId ?? await adminTab(), mcpRequest, [operation,payload ?? null]);
+  const result = await runIn(tabId ?? await adminTab(), mcpRequest, [operation,payload ?? null,mcpOrigin]);
   if (!result.ok) throw new Error(result.error);
   return result.data;
 }
@@ -302,6 +305,7 @@ function importEnvelope(bundle, account) {
     version:2,
     exportedAt:new Date().toISOString(),
     target:{
+      serviceOrigin:mcpOrigin,
       accountId:account.id,
       label:account.label,
       configuredEmail:account.email
@@ -312,7 +316,8 @@ function importEnvelope(bundle, account) {
 
 function showPreview(bundle, account) {
   const envelope = importEnvelope(bundle, account);
-  pendingImport = {bundle, account, envelope};
+  pendingImport = {bundle, account, envelope, serviceOrigin:mcpOrigin};
+  $('previewService').textContent = mcpOrigin;
   $('previewEmail').textContent = bundle.email;
   $('previewAccount').textContent = account.label + (account.email ? ` · ${account.email}` : '');
   $('previewUid').textContent = bundle.uid.length > 8 ? '…' + bundle.uid.slice(-8) : bundle.uid;
@@ -379,6 +384,7 @@ async function inspect() {
 }
 
 async function detect() {
+  if (!mcpOrigin) throw new Error('请先配置 MCP 服务地址');
   ready = false;
   clearPreview();
   $('connect').disabled = true;
@@ -490,6 +496,7 @@ async function confirmImport() {
   $('previewDialog').close();
   $('status').textContent = '正在导入…';
   try {
+    if (pending.serviceOrigin !== mcpOrigin) throw new Error('服务地址已变化，请重新检测');
     if (Date.now() - pending.bundle.capturedAt > 14 * 60 * 1000) {
       throw new Error('预览已过期，请重新预览后导入');
     }
@@ -501,17 +508,21 @@ async function confirmImport() {
     }
     // Keep pair/import on the same authenticated management document.
     const targetTab = await adminTab();
-    const pair = await callMcp('pair',{
+    logEvent('配对', '向已登录管理页请求一次性令牌', {target:mcpOrigin});
+    const rawPair = await callMcp('pair',{
       account:pending.account.id,
       uid:pending.bundle.uid,
       email:pending.bundle.email
     }, targetTab);
-    if (!pair.token || !Number.isFinite(pair.expiresAt) || pair.expiresAt <= Date.now()) throw new Error('配对响应无效');
+    logEvent('配对', '收到响应', {tokenPresent:typeof rawPair?.token === 'string' && !!rawPair.token,expiresType:typeof rawPair?.expiresAt,expiresValid:Number.isFinite(Number(rawPair?.expiresAt)) && Number(rawPair.expiresAt)>Date.now(),expiresInMs:Number.isFinite(Number(rawPair?.expiresAt)) ? Number(rawPair.expiresAt)-Date.now() : 'invalid'});
+    const pair = normalizePairResponse(rawPair);
+    logEvent('导入', '开始上传会话', {target:mcpOrigin});
     const response = await callMcp('import',{
       account:pending.account.id,
       token:pair.token,
       bundle:pending.bundle
     }, targetTab);
+    logEvent('导入', '收到响应', {success:response?.success === true});
     if (!response.success) throw new Error('导入未确认，请查看管理页');
     $('status').textContent = response.refreshTestRequired
       ? '导入成功。建议到管理页执行一次“测试续期”。'
@@ -539,7 +550,8 @@ async function act(fn) {
   } finally {
     busy = false;
     $('detect').disabled = false;
-    $('login').disabled = false;
+    $('login').disabled = !mcpOrigin;
+    $('saveService').disabled = false;
     $('proton').disabled = !$('proton').options.length;
     $('account').disabled = !$('account').options.length;
     $('connect').disabled = !ready;
@@ -555,7 +567,7 @@ async function act(fn) {
 $('detect').onclick = () => act(detect);
 $('proton').onchange = () => act(inspect);
 $('connect').onclick = () => act(previewImport);
-$('login').onclick = () => chrome.tabs.create({url:ADMIN});
+$('login').onclick = () => { if(mcpOrigin) void chrome.tabs.create({url:adminUrl()}); };
 $('closePreview').onclick = clearPreview;
 $('cancelPreview').onclick = clearPreview;
 $('exportBundle').onclick = () => {
@@ -580,6 +592,45 @@ $('clearLog').onclick = () => {
   $('logOutput').textContent = '暂无日志';
 };
 
+async function initialize() {
+  const saved = await chrome.storage.local.get('mcpOrigin');
+  if (saved.mcpOrigin) {
+    try {
+      const origin = normalizeMcpOrigin(saved.mcpOrigin);
+      if (await chrome.permissions.contains({origins:[origin + '/*']})) mcpOrigin = origin;
+    } catch {}
+  }
+  $('serviceOrigin').value = mcpOrigin;
+  $('serviceSettings').open = !mcpOrigin;
+  $('login').disabled = !mcpOrigin;
+  if (mcpOrigin) await act(detect);
+  else {
+    $('detect').disabled = true;
+    $('status').textContent = '首次使用：填写自己的 MCP 服务地址并保存，授权后打开管理页登录。';
+  }
+}
+
+$('saveService').onclick = () => {
+  let origin;
+  try { origin = normalizeMcpOrigin($('serviceOrigin').value); }
+  catch(error) { $('status').textContent = error.message; return; }
+  // Invoke request synchronously from the click so Chrome retains user gesture.
+  const permission = chrome.permissions.request({origins:[origin + '/*']});
+  void act(async () => {
+    if (!await permission) throw new Error('未授权该服务地址的访问权限，配置未保存');
+    const previous = mcpOrigin;
+    await chrome.storage.local.set({mcpOrigin:origin});
+    mcpOrigin = origin;
+    ready = false;
+    clearPreview();
+    $('account').replaceChildren();
+    $('serviceOrigin').value = origin;
+    $('serviceSettings').open = false;
+    if (previous && previous !== origin) await chrome.permissions.remove({origins:[previous + '/*']});
+    $('status').textContent = '地址已保存。请打开管理页登录，再切回 Proton 点击“重新检测”。';
+    logEvent('服务配置', '已保存，需重新检测', {target:origin});
+  });
+};
 logEvent('扩展', '启动', {version:chrome.runtime.getManifest().version});
-void act(detect);
+void initialize().catch(() => { $('status').textContent = '读取服务地址失败，请重新打开扩展'; });
 

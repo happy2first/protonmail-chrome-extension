@@ -123,10 +123,10 @@ test('MCP bridge refuses other origins and missing backend support before upload
   let calls=0;
   globalThis.fetch=async()=>{calls++;throw new Error('unexpected')};
   globalThis.location={origin:'https://evil.example',pathname:'/proton/import'};
-  assert.equal((await mcpRequest('import',{})).ok,false);
+  assert.equal((await mcpRequest('import',{},'https://mail.example.test')).ok,false);
   globalThis.location={origin:'https://mail.mcp.happyfirst.top',pathname:'/proton/import'};
   globalThis.document={querySelector:()=>null};
-  assert.equal((await mcpRequest('import',{})).ok,false);
+  assert.equal((await mcpRequest('import',{},'https://mail.example.test')).ok,false);
   assert.equal(calls,0);
 });
 
@@ -135,18 +135,18 @@ test('manifest contains minimal permissions and account origin host permission',
   const manifest=JSON.parse(readFileSync(new URL('manifest.json',root),'utf8'));
   assert.equal(manifest.manifest_version,3);
   assert.equal(manifest.version,JSON.parse(readFileSync(new URL('../package.json', root),'utf8')).version);
-  assert.deepEqual(manifest.permissions,['cookies','scripting']);
+  assert.deepEqual(manifest.permissions,['cookies','scripting','storage']);
   assert.deepEqual(manifest.host_permissions,[
     'https://proton.me/*',
     'https://mail.proton.me/*',
-    'https://account.proton.me/*',
-    'https://mail.mcp.happyfirst.top/*'
+    'https://account.proton.me/*'
   ]);
+  assert.deepEqual(manifest.optional_host_permissions,['https://*/*']);
   assert.equal(manifest.background,undefined);
   assert.equal(manifest.content_scripts,undefined);
   for(const file of ['popup.html','popup.css','popup.js','core.js','bridge.js'])assert.ok(readFileSync(new URL(file,root)).length);
   for(const file of ['popup.js','core.js']){
-    assert.doesNotMatch(readFileSync(new URL(file,root),'utf8'),/localStorage|sessionStorage|chrome\.storage|console\.|indexedDB/);
+    assert.doesNotMatch(readFileSync(new URL(file,root),'utf8'),/localStorage|sessionStorage|console\.|indexedDB/);
   }
   const bridge=readFileSync(new URL('bridge.js',root),'utf8');
   assert.doesNotMatch(bridge,/sessionStorage|chrome\.storage|console\.|indexedDB/);
@@ -405,7 +405,8 @@ test('preview and export redact keyPassword while confirmed import keeps in-memo
   const js=readFileSync(new URL('popup.js',root),'utf8');
   assert.match(js,/delete copy\.keyPassword/);
   assert.match(js,/secretIncluded:false/);
-  assert.match(js,/pendingImport = \{bundle, account, envelope\}/);
+  assert.match(js,/pendingImport = \{bundle, account, envelope, serviceOrigin:mcpOrigin\}/);
   assert.match(js,/bundle:pending\.bundle/);
   assert.doesNotMatch(js,/JSON\.stringify\(pendingImport\.bundle/);
 });
+

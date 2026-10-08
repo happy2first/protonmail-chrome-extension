@@ -1,7 +1,26 @@
 export const PROTON = 'https://mail.proton.me';
 export const ACCOUNT = 'https://account.proton.me';
-export const MCP = 'https://mail.mcp.happyfirst.top';
-export const ADMIN = MCP + '/proton/import';
+export function normalizeMcpOrigin(value) {
+  let url;
+  try { url = new URL(String(value || '').trim()); }
+  catch { throw new Error('请输入有效的 MCP HTTPS 服务地址'); }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash ||
+      !['/','/proton/import','/proton/import/'].includes(url.pathname)) {
+    throw new Error('服务地址须为 HTTPS 域名或 /proton/import 管理页地址，不能包含账号、参数或片段');
+  }
+  if (['proton.me','mail.proton.me','account.proton.me'].includes(url.hostname)) {
+    throw new Error('请输入 MCP 服务地址，不能填写 Proton 网站地址');
+  }
+  return url.origin;
+}
+
+export function normalizePairResponse(pair, now = Date.now()) {
+  const expiresAt = Number(pair?.expiresAt);
+  if (typeof pair?.token !== 'string' || !pair.token.trim() || !Number.isFinite(expiresAt) || expiresAt <= now) {
+    throw new Error('配对响应缺少有效 token 或毫秒到期时间，请检查服务端版本与配对日志');
+  }
+  return {token:pair.token,expiresAt};
+}
 
 function pathCovers(cookiePath, requestPath) {
   const path = String(cookiePath || '/');

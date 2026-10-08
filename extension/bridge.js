@@ -334,8 +334,8 @@ export async function readKeySalts(uid) {
   }
 }
 
-export async function mcpRequest(operation, payload) {
-  if (location.origin !== 'https://mail.mcp.happyfirst.top' || location.pathname !== '/proton/import') return {ok:false,error:'请登录 MCP 管理页'};
+export async function mcpRequest(operation, payload, expectedOrigin) {
+  if (!expectedOrigin || location.origin !== expectedOrigin || !expectedOrigin.startsWith('https://') || location.pathname !== '/proton/import') return {ok:false,error:'请登录 MCP 管理页'};
   const routes = {accounts:['GET','accounts'], pair:['POST','extension-pair'], import:['POST','extension-import']};
   if (!Object.hasOwn(routes, operation)) return {ok:false,error:'操作无效'};
   const csrf = document.querySelector('meta[name="proton-extension-csrf"]')?.content;
@@ -352,7 +352,7 @@ export async function mcpRequest(operation, payload) {
         ...(method === 'POST' ? {'content-type':'application/json','x-csrf-token':csrf} : {})
       },
       body:method === 'POST' ? JSON.stringify(payload) : undefined,
-      signal:AbortSignal.timeout(25000)
+      signal:AbortSignal.timeout(operation === 'import' ? 60000 : 30000)
     });
     if (!r.ok) {
       let detail = null;
@@ -360,7 +360,16 @@ export async function mcpRequest(operation, payload) {
       return {ok:false,error:detail?.error || `MCP HTTP ${r.status}；请检查 Access 登录、账号匹配与服务端扩展接口`};
     }
     const result = await r.json();
-    return {ok:true, data:result};
+    // Support the direct import-page response and older DO-style envelopes.
+    // A HTTP 200 business failure must never be treated as successful pairing.
+    if (result?.ok === false || result?.success === false) {
+      return {ok:false,error:typeof result.error === 'string' ? result.error : 'MCP 返回业务失败，请检查服务端状态'};
+    }
+    const data = result?.ok === true && result.data && typeof result.data === 'object' ? result.data : result;
+    if (data?.ok === false || data?.success === false) {
+      return {ok:false,error:typeof data.error === 'string' ? data.error : 'MCP 返回业务失败，请检查服务端状态'};
+    }
+    return {ok:true, data};
   } catch {
     return {ok:false,error:'MCP 连接中断或超时。导入结果可能已保存，请先检查管理页状态'};
   }
