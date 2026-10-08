@@ -58,7 +58,7 @@
 
 派生密钥恢复失败时，扩展会尝试 KeySalt 兼容路径：先请求 Mail，再尝试 Account。**KeySalt 不等于解密密钥**，该路径仍依赖服务端的密码配置。
 
-扩展没有后台 service worker、收信轮询或遥测；storage 权限仅用于保存服务地址。上传使用管理页现有 Access 和 CSRF 校验，不绕过登录或二步验证。服务端验证和加密保存规则见 [配套协议](docs/server-integration.md)。内存中的 JavaScript 字符串无法保证物理安全擦除。
+后台 service worker 仅处理服务地址授权、保存和旧站点权限撤销；不读取邮箱会话。storage 权限仅用于保存服务地址。上传使用管理页现有 Access 和 CSRF 校验，不绕过登录或二步验证。服务端验证和加密保存规则见 [配套协议](docs/server-integration.md)。内存中的 JavaScript 字符串无法保证物理安全擦除。
 
 ### 预览与导出
 
