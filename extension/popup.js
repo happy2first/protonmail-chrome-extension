@@ -560,7 +560,7 @@ async function act(fn) {
     if ($('diagnostics')) $('diagnostics').open = true;
   } finally {
     busy = false;
-    $('detect').disabled = false;
+    $('detect').disabled = !mcpOrigin;
     $('login').disabled = !mcpOrigin;
     $('saveService').disabled = false;
     $('proton').disabled = !$('proton').options.length;
@@ -604,6 +604,7 @@ $('clearLog').onclick = () => {
 };
 
 async function initialize() {
+  $('saveService').disabled = true;
   const saved = await chrome.storage.local.get('mcpOrigin');
   if (saved.mcpOrigin) {
     try {
@@ -619,30 +620,35 @@ async function initialize() {
     $('detect').disabled = true;
     $('status').textContent = '首次使用：填写自己的 MCP 服务地址并保存，授权后打开管理页登录。';
   }
+  $('saveService').disabled = false;
 }
 
 $('saveService').onclick = () => {
+  if (busy) return;
   let origin;
   try { origin = normalizeMcpOrigin($('serviceOrigin').value); }
   catch(error) { $('status').textContent = error.message; return; }
-  // Invoke request synchronously from the click so Chrome retains user gesture.
-  const permission = chrome.permissions.request({origins:[origin + '/*']});
+  // Send synchronously from the click. The background owns permission/save
+  // completion because the permission prompt can destroy this popup.
+  const saved = chrome.runtime.sendMessage({type:'saveMcpOrigin',origin});
   void act(async () => {
-    if (!await permission) throw new Error('未授权该服务地址的访问权限，配置未保存');
-    const previous = mcpOrigin;
-    await chrome.storage.local.set({mcpOrigin:origin});
-    mcpOrigin = origin;
+    $('status').textContent = '正在授权并保存；若弹窗关闭，允许授权后重新打开扩展即可。';
+    const result = await saved;
+    if (!result?.ok) throw new Error(result?.error || '保存服务地址失败');
+    mcpOrigin = result.origin;
     mcpClock = null;
     ready = false;
     clearPreview();
     $('account').replaceChildren();
     $('serviceOrigin').value = origin;
     $('serviceSettings').open = false;
-    if (previous && previous !== origin) await chrome.permissions.remove({origins:[previous + '/*']});
     $('status').textContent = '地址已保存。请打开管理页登录，再切回 Proton 点击“重新检测”。';
     logEvent('服务配置', '已保存，需重新检测', {target:origin});
   });
 };
 logEvent('扩展', '启动', {version:chrome.runtime.getManifest().version});
-void initialize().catch(() => { $('status').textContent = '读取服务地址失败，请重新打开扩展'; });
+void initialize().catch(() => {
+  $('saveService').disabled = false;
+  $('status').textContent = '读取服务地址失败，请重新打开扩展';
+});
 

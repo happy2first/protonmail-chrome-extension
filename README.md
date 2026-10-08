@@ -2,7 +2,7 @@
 
 将桌面浏览器中已登录的 Proton Mail 会话导入 [Personal Mail MCP](https://github.com/happy2first/personal-mail-mcp)，供服务端访问邮箱。扩展提供会话检测、账号匹配、导入预览和确认上传，不负责后台收信或自动续期。
 
-当前扩展版本：**0.4.4**。使用 Manifest V3，导入协议为 **Browser Session Bundle v3**。
+当前扩展版本：**0.4.5**。使用 Manifest V3，导入协议为 **Browser Session Bundle v3**。
 
 扩展不会读取 Proton 原始登录密码。正常流程会从浏览器已有的加密会话中恢复派生解密密钥 `keyPassword`，并在你确认导入后连同会话 Cookie 上传到指定 MCP 服务端。
 
@@ -13,7 +13,7 @@
 - 首次使用填写自己的 MCP HTTPS 服务地址，授权该站点访问；在同一浏览器配置文件中打开该服务的 `/proton/import` 管理页，完成 Cloudflare Access 登录。
 - 服务端已配置目标 Proton 账号，并支持 Bundle v3 的账号查询、一次性配对和导入接口。配置邮箱须属于当前 Proton 会话，可以是其别名地址。
 
-本仓库不预设管理服务地址。首次使用在“MCP 服务地址”填写自己的 HTTPS 域名（也可粘贴 `/proton/import` 管理页地址），点击“保存并授权”。扩展仅保存该地址，按需申请指定站点访问权限；以后可在同一位置修改。修改后会清空预览、撤销旧服务的可选权限并要求重新检测。服务端接口与配置要求见 [配套协议](docs/server-integration.md)；已有兼容部署无需重复部署，不能仅凭扩展版本判断线上服务端是否已更新。
+本仓库不预设管理服务地址。首次使用在“MCP 服务地址”填写自己的 HTTPS 域名（也可粘贴 `/proton/import` 管理页地址），点击一次“保存并授权”。若浏览器授权框使扩展弹窗关闭，允许授权后重新打开扩展即可，后台会完成保存，无需再次点击。扩展仅保存该地址，按需申请指定站点访问权限；以后可在同一位置修改。修改后会清空预览、撤销旧服务的可选权限并要求重新检测。服务端接口与配置要求见 [配套协议](docs/server-integration.md)；已有兼容部署无需重复部署，不能仅凭扩展版本判断线上服务端是否已更新。
 
 ## 安装与升级
 
@@ -26,7 +26,7 @@
 
 也可在 [GitHub Actions](https://github.com/happy2first/protonmail-chrome-extension/actions) 中打开一次成功的 `Extension checks`，下载 `protonmail-chrome-extension-unpacked` 产物，解压后加载包含 `manifest.json` 的目录。下载 Actions 产物通常需要登录 GitHub。
 
-**升级已有扩展：** 用新版本文件替换原加载目录的内容，在扩展管理页点击“重新加载”，确认版本为 **0.4.4**；随后刷新 Proton Mail 和 MCP 管理页。
+**升级已有扩展：** 用新版本文件替换原加载目录的内容，在扩展管理页点击“重新加载”，确认版本为 **0.4.5**；随后刷新 Proton Mail 和 MCP 管理页。
 
 ## 导入流程
 
@@ -109,7 +109,7 @@ npm run test:browser
 
 覆盖内容包括三种持久会话加密格式、HttpOnly 父域 Cookie、账号切换与别名匹配、预览与确认上传、Cookie 变化、检测失败和 KeySalt 兼容路径。GitHub Actions 通过单元测试、语法检查及 Chromium 回归后，才上传扩展产物。
 
-0.4.2 修复脱敏邮箱匹配与慢响应处理；0.4.4 修复设备与服务端时钟偏差导致的令牌误判和 Bundle 时间戳问题；0.4.3 增加首次配置服务地址、可选站点授权、目标服务预览，以及配对响应格式兼容和安全诊断。
+0.4.5 修复首次授权关闭弹窗导致地址未保存的问题；0.4.2 修复脱敏邮箱匹配与慢响应处理；0.4.4 修复设备与服务端时钟偏差导致的令牌误判和 Bundle 时间戳问题；0.4.3 增加首次配置服务地址、可选站点授权、目标服务预览，以及配对响应格式兼容和安全诊断。
 
 **验证状态：** 0.4.1 的 [GitHub Actions 检查](https://github.com/happy2first/protonmail-chrome-extension/actions/runs/37087689842)已全部通过。真实账号与线上 Worker 的端到端导入、正文读取和续期仍需在实际环境验收。
 

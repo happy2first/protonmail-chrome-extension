@@ -142,7 +142,7 @@ test('manifest contains minimal permissions and account origin host permission',
     'https://account.proton.me/*'
   ]);
   assert.deepEqual(manifest.optional_host_permissions,['https://*/*']);
-  assert.equal(manifest.background,undefined);
+  assert.deepEqual(manifest.background,{service_worker:'background.js',type:'module'});
   assert.equal(manifest.content_scripts,undefined);
   for(const file of ['popup.html','popup.css','popup.js','core.js','bridge.js'])assert.ok(readFileSync(new URL(file,root)).length);
   for(const file of ['popup.js','core.js']){

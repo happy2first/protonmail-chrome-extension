@@ -9,7 +9,7 @@ jobs:
         with:
           node-version: 22
       - run: npm test
-      - run: node --check extension/popup.js && node --check extension/bridge.js
+      - run: node --check extension/popup.js && node --check extension/bridge.js && node --check extension/background.js
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
@@ -17,3 +17,4 @@ jobs:
         with:
           name: protonmail-chrome-extension-unpacked
           path: extension/
+

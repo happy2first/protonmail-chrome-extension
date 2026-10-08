@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Proton → Personal Mail MCP",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "从当前 Proton 浏览器会话恢复 Session 与派生解密材料，确认后导入 Personal Mail MCP。",
   "minimum_chrome_version": "120",
   "permissions": [
@@ -14,6 +14,7 @@
     "https://mail.proton.me/*",
     "https://account.proton.me/*"
   ],
+  "background": {"service_worker":"background.js","type":"module"},
   "action": {
     "default_popup": "popup.html",
     "default_title": "连接 Personal Mail MCP"

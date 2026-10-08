@@ -120,11 +120,46 @@ try {
   assert.equal(requests.length,0);
   assert.equal(await popup.locator('#login').isEnabled(),false);
   await popup.fill('#serviceOrigin','https://mail.example.test/proton/import');
-  await clickAndWait('#saveService');
+  // Delay completion after the real (test-pregranted) permission API call,
+  // destroy the popup document, then complete approval in the real MV3 worker.
+  // Native browser permission UI itself is not automated by this fixture.
+  const background = context.serviceWorkers().find(w=>w.url().endsWith('/background.js'))
+    || await context.waitForEvent('serviceworker');
+  await background.evaluate(()=>{
+    const original=chrome.permissions.request.bind(chrome.permissions);
+    chrome.permissions.request=options=>{
+      chrome.permissions.request=original;
+      return original(options).then(granted=>new Promise(resolve=>{
+        globalThis.completeTestApproval=()=>resolve(granted);
+      }));
+    };
+  });
+  await popup.click('#saveService');
+  await popup.waitForFunction(()=>document.getElementById('status').textContent.includes('正在授权并保存'));
+  await background.evaluate(async()=>{
+    for(let i=0;i<200;i++) {
+      if(typeof globalThis.completeTestApproval==='function') return;
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+    throw new Error('background did not request permission');
+  });
+  await popup.goto('about:blank');
+  assert.deepEqual(await background.evaluate(()=>chrome.storage.local.get(null)),{});
+  await background.evaluate(()=>globalThis.completeTestApproval());
+  // Wait for durable storage without a popup callback or second click.
+  await background.evaluate(async()=>{
+    for(let i=0;i<200;i++) {
+      if((await chrome.storage.local.get('mcpOrigin')).mcpOrigin==='https://mail.example.test') return;
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+    throw new Error('background failed to save after popup closed');
+  });
+  await open();
+  await assertReady();
   assert.equal(await popup.locator('#serviceOrigin').inputValue(),'https://mail.example.test');
   const stored = await popup.evaluate(()=>chrome.storage.local.get(null));
   assert.deepEqual(stored,{mcpOrigin:'https://mail.example.test'});
-  console.log('PASS: first use is unconfigured, only chosen service origin is stored');
+  console.log('PASS: one save survives popup destruction during approval; reopened popup uses stored origin');
 
   for (const version of [1,2,3]) {
     fixture = await sessionFixture(version);
