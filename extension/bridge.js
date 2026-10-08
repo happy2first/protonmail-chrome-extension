@@ -1,24 +1,37 @@
 // Runs only in Chrome's ISOLATED world. It can recover Proton's derived keyPassword from the current encrypted persisted session; it never reads the user's raw password field.
 export async function readProton(uid) {
   if (location.origin !== 'https://mail.proton.me') return {ok:false, error:'请返回 Proton Mail 页面'};
+  let requestPath = '';
+  let attempt = 0;
+  const startedAt = Date.now();
   try {
     const get = async path => {
-      const response = await fetch('/api' + path, {
-        credentials:'same-origin',
-        cache:'no-store',
-        redirect:'error',
-        headers:{
-          accept:'application/json',
-          'x-pm-uid':uid,
-          'x-pm-appversion':'web-mail@5.0.133.5',
-          'x-pm-locale':'en_US'
-        },
-        signal:AbortSignal.timeout(15000)
-      });
-      if (!response.ok) throw new Error(`${path} HTTP ${response.status}`);
-      const data = await response.json();
-      if (data.Code !== 1000) throw new Error(`${path} Proton ${Number(data.Code) || '响应异常'}`);
-      return data;
+      requestPath = path;
+      for (attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          const response = await fetch('/api' + path, {
+            credentials:'same-origin', cache:'no-store', redirect:'error',
+            headers:{accept:'application/json','x-pm-uid':uid,
+              'x-pm-appversion':'web-mail@5.0.133.5','x-pm-locale':'en_US'},
+            signal:AbortSignal.timeout(30000)
+          });
+          if (!response.ok) throw new Error(`${path} HTTP ${response.status}`);
+          let data;
+          try { data = await response.json(); }
+          catch (error) {
+            if (error?.name === 'TimeoutError' || error?.name === 'AbortError') throw error;
+            throw new Error(`${path} 返回的 JSON 无效`);
+          }
+          if (data.Code !== 1000) throw new Error(`${path} Proton ${Number(data.Code) || '响应异常'}`);
+          return data;
+        } catch (error) {
+          const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+          if (timedOut && attempt < 2) continue;
+          if (timedOut) throw new Error(`${path} 请求超时（每次最多 30 秒，已尝试 ${attempt} 次）；请确认 Proton 页面可正常加载后重新检测`);
+          if (error instanceof TypeError) throw new Error(`${path} 网络请求失败；请检查 Proton 页面连接后重新检测`);
+          throw error;
+        }
+      }
     };
     const user = (await get('/core/v4/users')).User;
     const addresses = (await get('/core/v4/addresses')).Addresses;
@@ -34,10 +47,12 @@ export async function readProton(uid) {
         passwordMode:[1,2].includes(Number(user?.PasswordMode)) ? Number(user.PasswordMode) : undefined
       },
       addresses:rows,
+      diagnostics:{requestPath,attempt,elapsedMs:Date.now()-startedAt},
       client:{mailAppVersion:'web-mail@5.0.133.5', locale:'en_US'}
     };
   } catch (e) {
-    return {ok:false, error:e instanceof Error ? e.message : 'Proton 检测失败'};
+    return {ok:false, error:e instanceof Error ? e.message : 'Proton 检测失败',
+      diagnostics:{requestPath,attempt,elapsedMs:Date.now()-startedAt}};
   }
 }
 
@@ -350,3 +365,4 @@ export async function mcpRequest(operation, payload) {
     return {ok:false,error:'MCP 连接中断或超时。导入结果可能已保存，请先检查管理页状态'};
   }
 }
+

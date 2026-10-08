@@ -59,6 +59,25 @@ export function refreshAvailable(cookies, uid) {
   return sessionState(cookies, uid).ready;
 }
 
+// /accounts returns a masked display email. Resolve only a unique address from
+// this verified Proton session; the server still checks the exact configured
+// email during pairing before accepting any Session Bundle.
+export function matchingAccounts(accounts, addresses) {
+  const emails = [...new Set((addresses || []).map(a => String(a.email || '').trim().toLowerCase()).filter(Boolean))];
+  const maskEmail = email => {
+    const at = email.indexOf('@');
+    if (at <= 0) return '';
+    const local = email.slice(0, at);
+    return (local.length <= 2 ? `${local[0]}*` : `${local.slice(0,2)}***${local.slice(-1)}`) + email.slice(at);
+  };
+  return (Array.isArray(accounts) ? accounts : []).flatMap(account => {
+    const display = String(account.email || '').trim().toLowerCase();
+    const exact = emails.filter(email => email === display);
+    const candidates = exact.length ? exact : emails.filter(email => maskEmail(email) === display);
+    return candidates.length === 1 ? [{...account,email:candidates[0],displayEmail:account.email}] : [];
+  });
+}
+
 export function bundleForAccount(bundle, account) {
   const email = String(account.email || '').trim().toLowerCase();
   if (!email || !bundle.addresses.some(a => a.email.toLowerCase() === email)) {
@@ -116,3 +135,4 @@ export function bundleFor(uid, cookies, result) {
   if (new TextEncoder().encode(JSON.stringify(bundle)).length > 110 * 1024) throw new Error('Session Bundle 超过大小限制');
   return bundle;
 }
+

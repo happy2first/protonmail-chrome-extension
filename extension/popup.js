@@ -1,4 +1,4 @@
-import {PROTON, ACCOUNT, ADMIN, selectCookies, sessionState, sessionCandidates, bundleFor, bundleForAccount} from './core.js';
+import {PROTON, ACCOUNT, ADMIN, selectCookies, sessionState, sessionCandidates, bundleFor, bundleForAccount, matchingAccounts} from './core.js';
 import {readProton, readPersistedSessionUid, readPersistedSessionIndex, readLocalSessions, readSessionKeyPassword, readKeySalts, mcpRequest} from './bridge.js';
 
 const $ = id => document.getElementById(id);
@@ -196,9 +196,10 @@ async function captureBundle(uid, updateUi = false) {
     cookieCount:cookies.length
   });
 
+  logEvent('Mail API', '读取 users/addresses（每个接口 30 秒，超时最多重试一次）', {uid:uidSuffix(uid)});
   const mail = await runIn(selectedTab, readProton, [uid]);
   if (!mail.ok) {
-    logEvent('Mail API', '读取用户信息失败', {uid:uidSuffix(uid),error:mail.error});
+    logEvent('Mail API', '读取用户信息失败', {uid:uidSuffix(uid),path:mail.diagnostics?.requestPath || 'unknown',attempt:mail.diagnostics?.attempt || 1,elapsedMs:mail.diagnostics?.elapsedMs || 0,error:mail.error});
     throw new Error(mail.error);
   }
   logEvent('Mail API', 'users/addresses 成功', {uid:uidSuffix(uid),addressCount:mail.addresses?.length || 0});
@@ -358,21 +359,23 @@ async function inspect() {
   $('salt').textContent = '待检测';
 
   const bundle = await captureBundle(uid, true);
+  logEvent('MCP 账号', '开始查询已配置账号');
   const data = await callMcp('accounts');
-  const matchingAccounts = data.accounts.filter(a => bundle.addresses.some(address =>
-    address.email.toLowerCase() === String(a.email || '').trim().toLowerCase()));
-  $('account').replaceChildren(...matchingAccounts.map(a => {
+  if (!Array.isArray(data?.accounts)) throw new Error('MCP 账号列表格式无效，请刷新管理页后重新检测');
+  const eligible = matchingAccounts(data.accounts, bundle.addresses);
+  logEvent('MCP 账号', '查询与匹配完成', {configured:data.accounts.length,matched:eligible.length});
+  $('account').replaceChildren(...eligible.map(a => {
     const option = new Option(`${a.label} · ${a.email}`, a.id);
     option.dataset.label = a.label;
     option.dataset.email = a.email;
     return option;
   }));
-  ready = matchingAccounts.length > 0;
+  ready = eligible.length > 0;
   $('account').disabled = !ready;
   $('connect').disabled = !ready;
   $('status').textContent = ready
     ? `已就绪：Bundle v${bundle.version}。点击“预览并连接”核对后导入。`
-    : 'MCP 中没有与当前 Proton 邮箱匹配的账号，请检查服务端账号配置';
+    : 'MCP 中没有唯一匹配的账号，请检查配置邮箱；若多个别名的脱敏邮箱相同，需服务端提供完整邮箱匹配信息';
 }
 
 async function detect() {
@@ -579,3 +582,4 @@ $('clearLog').onclick = () => {
 
 logEvent('扩展', '启动', {version:chrome.runtime.getManifest().version});
 void act(detect);
+

@@ -2,7 +2,7 @@
 
 将桌面浏览器中已登录的 Proton Mail 会话导入 [Personal Mail MCP](https://github.com/happy2first/personal-mail-mcp)，供服务端访问邮箱。扩展提供会话检测、账号匹配、导入预览和确认上传，不负责后台收信或自动续期。
 
-当前扩展版本：**0.4.1**。使用 Manifest V3，导入协议为 **Browser Session Bundle v3**。
+当前扩展版本：**0.4.2**。使用 Manifest V3，导入协议为 **Browser Session Bundle v3**。
 
 扩展不会读取 Proton 原始登录密码。正常流程会从浏览器已有的加密会话中恢复派生解密密钥 `keyPassword`，并在你确认导入后连同会话 Cookie 上传到指定 MCP 服务端。
 
@@ -26,14 +26,14 @@
 
 也可在 [GitHub Actions](https://github.com/happy2first/protonmail-chrome-extension/actions) 中打开一次成功的 `Extension checks`，下载 `protonmail-chrome-extension-unpacked` 产物，解压后加载包含 `manifest.json` 的目录。下载 Actions 产物通常需要登录 GitHub。
 
-**升级已有扩展：** 用新版本文件替换原加载目录的内容，在扩展管理页点击“重新加载”，确认版本为 **0.4.1**；随后刷新 Proton Mail 和 MCP 管理页。
+**升级已有扩展：** 用新版本文件替换原加载目录的内容，在扩展管理页点击“重新加载”，确认版本为 **0.4.2**；随后刷新 Proton Mail 和 MCP 管理页。
 
 ## 导入流程
 
 1. 登录 Proton Mail 和 MCP 管理页，保持两个页面打开。
 2. 切回要导入的 Proton Mail 标签页，点击扩展图标。
 3. 等待 AUTH、Session-Id、REFRESH 和解密材料检测完成。多账号时核对所选 Proton 会话及显示的邮箱。
-4. 选择目标 MCP 账号。下拉框只显示配置邮箱属于当前 Proton 会话的账号，包括别名；没有匹配项时不能导入。
+4. 选择目标 MCP 账号。下拉框只显示能匹配当前 Proton 会话地址的账号，包括别名；兼容服务端脱敏邮箱列表，仅在当前地址列表中唯一匹配时列出。服务端在配对时仍核对完整邮箱；没有匹配项或别名脱敏结果有歧义时不能导入。
 5. 点击“预览并连接”，核对 Proton 邮箱、目标账号和材料状态。此时尚未创建配对或上传会话。
 6. 点击“确认导入”，等待成功提示。**上传期间保持扩展弹窗打开**，不要切换标签页或点击弹窗外部。
 7. 成功后刷新 MCP 管理页，检查账号状态，并通过 MCP 读取一封邮件正文，验证实际访问与解密。需要验证续期时，再使用管理页的续期测试功能。
@@ -61,9 +61,11 @@
 
 ### 预览与导出
 
-“导出 JSON”仅供本地核对或排障，**不是包含所有解密材料的完整备份**。即使界面写着“查看完整导入 JSON”，预览和导出仍会排除 `keyPassword`；实际确认上传使用内存中的 Bundle。
+“导出 JSON”仅供本地核对或排障，**不是包含所有解密材料的完整备份**。预览和导出会排除 `keyPassword`；实际确认上传使用内存中的 Bundle。
 
 预览及导出保留会话 Cookie；若使用 KeySalt 兼容路径，也会包含 KeySalt。文件仍是敏感凭证，请勿公开或直接附在 Issue 中。一般排障优先提供“诊断日志”，不要提供导出文件。
+
+Proton 用户信息读取的每个接口最多等待 30 秒，仅超时会再尝试一次；HTTP 错误不自动重试。失败日志包含具体接口、尝试次数和耗时。
 
 ## 常见问题
 
@@ -100,4 +102,7 @@ npm run test:browser
 
 覆盖内容包括三种持久会话加密格式、HttpOnly 父域 Cookie、账号切换与别名匹配、预览与确认上传、Cookie 变化、检测失败和 KeySalt 兼容路径。GitHub Actions 通过单元测试、语法检查及 Chromium 回归后，才上传扩展产物。
 
+0.4.2 修复服务端脱敏邮箱无法匹配的问题，并补充超时重试、接口诊断及脱敏账号回归。
+
 **验证状态：** 0.4.1 的 [GitHub Actions 检查](https://github.com/happy2first/protonmail-chrome-extension/actions/runs/37087689842)已全部通过。真实账号与线上 Worker 的端到端导入、正文读取和续期仍需在实际环境验收。
+

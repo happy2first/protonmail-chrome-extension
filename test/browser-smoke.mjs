@@ -20,6 +20,7 @@ const context = await chromium.launchPersistentContext(profile, {
 });
 const requests = [];
 let failUsers = false;
+let slowUsers = false;
 let accountsMismatch = false;
 let fixture = await sessionFixture(1);
 const other = await sessionFixture(2, {uid:'uid-nine',keyPassword:'TEST-ONLY-other-secret'});
@@ -49,6 +50,10 @@ try {
     const uid = request.headers()['x-pm-uid'];
     const isOther = uid === 'uid-nine';
     if (path === '/api/core/v4/users') {
+      if (slowUsers) {
+        slowUsers = false;
+        await new Promise(resolve => setTimeout(resolve,16000));
+      }
       return json(route, failUsers ? {Code:10013} : {Code:1000,User:{ID:isOther?'user-nine':'user-seven',
         Email:isOther?otherEmail:primary,Keys:[{ID:'key-1'}],PasswordMode:1}}, failUsers ? 401 : 200);
     }
@@ -59,7 +64,7 @@ try {
     if (path === '/api/core/v4/keys/salts') return json(route, {Code:1000,KeySalts:[{ID:'key-1',KeySalt:'TEST-ONLY-salt'}]});
     if (path === '/proton/import/api/accounts') return json(route, {accounts:[
       {id:'wrong',label:'Wrong account first',email:'wrong@proton.me'},
-      ...(!accountsMismatch ? [{id:'alias',label:'Matching alias',email:alias},{id:'nine',label:'Other account',email:otherEmail}] : [])
+      ...(!accountsMismatch ? [{id:'alias',label:'Matching alias',email:'al***s@proton.me'},{id:'nine',label:'Other account',email:'ni***e@proton.me'}] : [])
     ]});
     if (path === '/proton/import/api/extension-pair') return json(route, {token:'TEST-ONLY-pair',expiresAt:Date.now()+300000});
     if (path === '/proton/import/api/extension-import') return json(route, {success:true,refreshTestRequired:true});
@@ -122,6 +127,13 @@ try {
     console.log(`PASS: real MV3 injection, HttpOnly parent-domain cookies, v${version} decryption, preview and confirmed import`);
   }
 
+  // A real delayed response must survive the old 15-second deadline.
+  slowUsers = true;
+  await open();
+  await assertReady();
+  assert.match(await popup.locator('#logOutput').textContent(),/MCP 账号.*matched=1/);
+  console.log('PASS: 16-second Proton response and masked server account list reach ready state');
+
   // Select another UID while the Mail tab URL still has LocalID 7.
   await open();
   await popup.selectOption('#proton','uid-nine');
@@ -170,3 +182,4 @@ try {
   await context.close();
   await rm(profile,{recursive:true,force:true});
 }
+
