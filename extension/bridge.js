@@ -369,7 +369,8 @@ export async function mcpRequest(operation, payload, expectedOrigin) {
     if (data?.ok === false || data?.success === false) {
       return {ok:false,error:typeof data.error === 'string' ? data.error : 'MCP 返回业务失败，请检查服务端状态'};
     }
-    return {ok:true, data};
+    const serverDateMs = Date.parse(r.headers?.get('date') || '');
+    return {ok:true, data,serverDateMs:Number.isFinite(serverDateMs) ? serverDateMs : null};
   } catch {
     return {ok:false,error:'MCP 连接中断或超时。导入结果可能已保存，请先检查管理页状态'};
   }

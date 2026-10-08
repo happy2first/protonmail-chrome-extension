@@ -1,4 +1,4 @@
-import {PROTON, ACCOUNT, normalizeMcpOrigin, normalizePairResponse, selectCookies, sessionState, sessionCandidates, bundleFor, bundleForAccount, matchingAccounts} from './core.js';
+import {PROTON, ACCOUNT, normalizeMcpOrigin, normalizePairResponse, makeServerClock, timeFromServerClock, selectCookies, sessionState, sessionCandidates, bundleFor, bundleForAccount, matchingAccounts} from './core.js';
 import {readProton, readPersistedSessionUid, readPersistedSessionIndex, readLocalSessions, readSessionKeyPassword, readKeySalts, mcpRequest} from './bridge.js';
 
 const $ = id => document.getElementById(id);
@@ -9,6 +9,8 @@ let pendingImport = null;
 let diagnosticLog = [];
 let ready = false;
 let mcpOrigin = '';
+let mcpClock = null;
+const serverNow = () => timeFromServerClock(mcpClock,performance.now());
 const adminUrl = () => mcpOrigin + '/proton/import';
 
 function uidSuffix(uid) {
@@ -154,8 +156,15 @@ async function adminTab() {
 }
 
 async function callMcp(operation, payload, tabId = null) {
+  const requestStarted = performance.now();
   const result = await runIn(tabId ?? await adminTab(), mcpRequest, [operation,payload ?? null,mcpOrigin]);
   if (!result.ok) throw new Error(result.error);
+  const monotonicNow = performance.now();
+  const clock = makeServerClock(result.serverDateMs,monotonicNow-requestStarted,monotonicNow);
+  if (clock) {
+    mcpClock = clock;
+    logEvent('服务时间', '使用服务端响应校准', {localAheadMs:Math.round(Date.now()-serverNow())});
+  }
   return result.data;
 }
 
@@ -186,7 +195,7 @@ async function captureBundle(uid, updateUi = false) {
   if (!state.refresh) throw new Error('未找到当前会话的 REFRESH Cookie');
   if (!state.sessionId) throw new Error('未找到 Proton Session-Id Cookie');
 
-  const cookies = selectCookies(rows, uid);
+  const cookies = selectCookies(rows, uid,serverNow());
   const mailTab = await chrome.tabs.get(selectedTab);
   const pageLocalId = localIdFromUrl(mailTab.url);
   const index = await runIn(selectedTab, readPersistedSessionIndex, []);
@@ -267,7 +276,7 @@ async function captureBundle(uid, updateUi = false) {
     client:{...(mail.client || {}),...(salts.client || {})}
   };
   // Proton may rotate cookies while the API calls above are in flight.
-  const freshCookies = selectCookies(await currentCookies(), uid);
+  const freshCookies = selectCookies(await currentCookies(), uid,serverNow());
   const bundle = bundleFor(uid, freshCookies, result);
   if (updateUi) {
     $('email').textContent = result.email;
@@ -316,7 +325,7 @@ function importEnvelope(bundle, account) {
 
 function showPreview(bundle, account) {
   const envelope = importEnvelope(bundle, account);
-  pendingImport = {bundle, account, envelope, serviceOrigin:mcpOrigin};
+  pendingImport = {bundle, account, envelope, serviceOrigin:mcpOrigin,capturedMono:performance.now()};
   $('previewService').textContent = mcpOrigin;
   $('previewEmail').textContent = bundle.email;
   $('previewAccount').textContent = account.label + (account.email ? ` · ${account.email}` : '');
@@ -411,7 +420,7 @@ async function detect() {
     auth:rows.filter(x => x.name.startsWith('AUTH-')).length,
     refresh:rows.filter(x => x.name.startsWith('REFRESH-')).length
   });
-  const candidates = sessionCandidates(rows);
+  const candidates = sessionCandidates(rows,serverNow());
   if (!candidates.length) throw new Error('没有找到同时包含 AUTH 和 REFRESH 的 Proton Session');
 
   let selectedUid = candidates[0].uid;
@@ -497,10 +506,10 @@ async function confirmImport() {
   $('status').textContent = '正在导入…';
   try {
     if (pending.serviceOrigin !== mcpOrigin) throw new Error('服务地址已变化，请重新检测');
-    if (Date.now() - pending.bundle.capturedAt > 14 * 60 * 1000) {
+    if (performance.now() - pending.capturedMono > 14 * 60 * 1000) {
       throw new Error('预览已过期，请重新预览后导入');
     }
-    const current = selectCookies(await currentCookies(), pending.bundle.uid);
+    const current = selectCookies(await currentCookies(), pending.bundle.uid,serverNow());
     const credentialRows = rows => rows.filter(c => /^(AUTH-|REFRESH-|Session-Id$)/.test(c.name))
       .map(c => JSON.stringify([c.name,c.domain,c.path,c.value])).sort();
     if (JSON.stringify(credentialRows(current)) !== JSON.stringify(credentialRows(pending.bundle.session.cookies))) {
@@ -514,13 +523,15 @@ async function confirmImport() {
       uid:pending.bundle.uid,
       email:pending.bundle.email
     }, targetTab);
-    logEvent('配对', '收到响应', {tokenPresent:typeof rawPair?.token === 'string' && !!rawPair.token,expiresType:typeof rawPair?.expiresAt,expiresValid:Number.isFinite(Number(rawPair?.expiresAt)) && Number(rawPair.expiresAt)>Date.now(),expiresInMs:Number.isFinite(Number(rawPair?.expiresAt)) ? Number(rawPair.expiresAt)-Date.now() : 'invalid'});
-    const pair = normalizePairResponse(rawPair);
+    logEvent('配对', '收到响应', {tokenPresent:typeof rawPair?.token === 'string' && !!rawPair.token,expiresType:typeof rawPair?.expiresAt,expiresValid:Number.isFinite(Number(rawPair?.expiresAt)) && Number(rawPair.expiresAt)>serverNow(),expiresInMs:Number.isFinite(Number(rawPair?.expiresAt)) ? Number(rawPair.expiresAt)-serverNow() : 'invalid'});
+    if (!mcpClock) throw new Error('服务端未返回有效 Date 时间，无法校准令牌；请同步电脑系统时间后重试或检查服务器响应头');
+    const pair = normalizePairResponse(rawPair,serverNow());
+    const uploadBundle = {...pending.bundle,capturedAt:serverNow()-(performance.now()-pending.capturedMono)};
     logEvent('导入', '开始上传会话', {target:mcpOrigin});
     const response = await callMcp('import',{
       account:pending.account.id,
       token:pair.token,
-      bundle:pending.bundle
+      bundle:uploadBundle
     }, targetTab);
     logEvent('导入', '收到响应', {success:response?.success === true});
     if (!response.success) throw new Error('导入未确认，请查看管理页');
@@ -621,6 +632,7 @@ $('saveService').onclick = () => {
     const previous = mcpOrigin;
     await chrome.storage.local.set({mcpOrigin:origin});
     mcpOrigin = origin;
+    mcpClock = null;
     ready = false;
     clearPreview();
     $('account').replaceChildren();

@@ -26,6 +26,14 @@ const context = await chromium.launchPersistentContext(profile, {
   ...(process.env.CHROMIUM_EXECUTABLE ? {executablePath:process.env.CHROMIUM_EXECUTABLE} : {}),
   args:[`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
 });
+// Reproduce a device clock 10 minutes ahead; the server fixture clock remains
+// correct. Cookie material uses session cookies so expiration does not mask it.
+await context.addInitScript(() => {
+  if (location.protocol === 'chrome-extension:') {
+    const realNow = Date.now.bind(Date);
+    Date.now = () => realNow() + 10 * 60 * 1000;
+  }
+});
 const requests = [];
 let failUsers = false;
 let slowUsers = false;
@@ -40,7 +48,7 @@ const cookieRows = uid => [
   {name:`REFRESH-${uid}`,value:encodeURIComponent(JSON.stringify({UID:uid,RefreshToken:`TEST-ONLY-refresh-${uid}`})),
     domain:'mail.proton.me',path:'/api/auth/refresh'}
 ];
-const json = (route, data, status = 200) => route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
+const json = (route, data, status = 200) => route.fulfill({status,headers:{date:new Date().toUTCString()},contentType:'application/json',body:JSON.stringify(data)});
 
 try {
   await context.route('**/*', async route => {
@@ -140,13 +148,15 @@ try {
     assert.equal(imported.bundle.keyPassword,fixture.keyPassword);
     assert.equal(imported.bundle.email,alias);
     assert.equal(imported.bundle.uid,'uid-seven');
+    assert.ok(Math.abs(imported.bundle.capturedAt-Date.now())<10000,'upload timestamp must use server time despite +10 minute device skew');
+    assert.match(await popup.locator('#logOutput').textContent(),/服务时间.*校准/);
     assert.equal(imported.bundle.session.cookies.some(c=>c.name.endsWith('uid-nine')),false);
     const sessionId = imported.bundle.session.cookies.find(c=>c.name==='Session-Id');
     assert.equal(sessionId.httpOnly,true);
     assert.equal(sessionId.hostOnly,false);
     assert.equal(requests.some(r=>r.path.endsWith('/keys/salts')),false);
     assert.equal((await popup.locator('#logOutput').textContent()).includes(fixture.keyPassword),false);
-    console.log(`PASS: real MV3 injection, HttpOnly parent-domain cookies, v${version} decryption, preview and confirmed import`);
+    console.log(`PASS: +10 minute clock skew, real MV3 injection, HttpOnly parent-domain cookies, v${version} decryption, preview and confirmed import`);
   }
 
   // A real delayed response must survive the old 15-second deadline.

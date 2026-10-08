@@ -2,7 +2,7 @@
 
 将桌面浏览器中已登录的 Proton Mail 会话导入 [Personal Mail MCP](https://github.com/happy2first/personal-mail-mcp)，供服务端访问邮箱。扩展提供会话检测、账号匹配、导入预览和确认上传，不负责后台收信或自动续期。
 
-当前扩展版本：**0.4.3**。使用 Manifest V3，导入协议为 **Browser Session Bundle v3**。
+当前扩展版本：**0.4.4**。使用 Manifest V3，导入协议为 **Browser Session Bundle v3**。
 
 扩展不会读取 Proton 原始登录密码。正常流程会从浏览器已有的加密会话中恢复派生解密密钥 `keyPassword`，并在你确认导入后连同会话 Cookie 上传到指定 MCP 服务端。
 
@@ -26,7 +26,7 @@
 
 也可在 [GitHub Actions](https://github.com/happy2first/protonmail-chrome-extension/actions) 中打开一次成功的 `Extension checks`，下载 `protonmail-chrome-extension-unpacked` 产物，解压后加载包含 `manifest.json` 的目录。下载 Actions 产物通常需要登录 GitHub。
 
-**升级已有扩展：** 用新版本文件替换原加载目录的内容，在扩展管理页点击“重新加载”，确认版本为 **0.4.3**；随后刷新 Proton Mail 和 MCP 管理页。
+**升级已有扩展：** 用新版本文件替换原加载目录的内容，在扩展管理页点击“重新加载”，确认版本为 **0.4.4**；随后刷新 Proton Mail 和 MCP 管理页。
 
 ## 导入流程
 
@@ -72,7 +72,7 @@ Proton 用户信息读取的每个接口最多等待 30 秒，仅超时会再尝
 
 配对由服务端完成。扩展在用户已登录的管理页中发送同源 POST，复用 Cloudflare Access 会话，并携带 CSRF Header。服务端生成一次性令牌，绑定验证后的登录身份、目标账号、Proton UID 和邮箱，有效期 5 分钟；服务端消费令牌并验证 Bundle 后才接受导入。失败后重新预览会创建新的配对，不复用旧令牌。
 
-扩展兼容直接返回的配对对象和 `{ok:true,data:...}` 响应，将数字字符串形式的毫秒到期时间转换为数字。HTTP 200 的业务失败仍会拒绝。配对日志只记录令牌是否存在、到期字段类型和有效性，不记录令牌内容。扩展请求配对等待 30 秒、导入等待 60 秒，不自动重试 POST；超时后先检查管理页状态。
+扩展兼容直接返回的配对对象和 `{ok:true,data:...}` 响应，将数字字符串形式的毫秒到期时间转换为数字。HTTP 200 的业务失败仍会拒绝。配对日志只记录令牌是否存在、到期字段类型和有效性，不记录令牌内容。扩展请求配对等待 30 秒、导入等待 60 秒，不自动重试 POST；超时后先检查管理页状态。令牌校验和上传时间戳使用已鉴权服务的 HTTP `Date` 时间，并通过单调时钟计算预览年龄，避免设备时钟偏差导致误报过期。服务须返回有效的 `Date` 响应头；扩展不修改系统时间，也不放宽服务端令牌有效期。
 
 ## 常见问题
 
@@ -109,7 +109,7 @@ npm run test:browser
 
 覆盖内容包括三种持久会话加密格式、HttpOnly 父域 Cookie、账号切换与别名匹配、预览与确认上传、Cookie 变化、检测失败和 KeySalt 兼容路径。GitHub Actions 通过单元测试、语法检查及 Chromium 回归后，才上传扩展产物。
 
-0.4.2 修复脱敏邮箱匹配与慢响应处理；0.4.3 增加首次配置服务地址、可选站点授权、目标服务预览，以及配对响应格式兼容和安全诊断。
+0.4.2 修复脱敏邮箱匹配与慢响应处理；0.4.4 修复设备与服务端时钟偏差导致的令牌误判和 Bundle 时间戳问题；0.4.3 增加首次配置服务地址、可选站点授权、目标服务预览，以及配对响应格式兼容和安全诊断。
 
 **验证状态：** 0.4.1 的 [GitHub Actions 检查](https://github.com/happy2first/protonmail-chrome-extension/actions/runs/37087689842)已全部通过。真实账号与线上 Worker 的端到端导入、正文读取和续期仍需在实际环境验收。
 

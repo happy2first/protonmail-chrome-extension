@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {runInNewContext} from 'node:vm';
-import {normalizeMcpOrigin,normalizePairResponse} from '../extension/core.js';
+import {normalizeMcpOrigin,normalizePairResponse,makeServerClock,timeFromServerClock} from '../extension/core.js';
 import {mcpRequest} from '../extension/bridge.js';
 
 test('configuration accepts HTTPS origin or management URL and rejects unsafe or unrelated forms',()=>{
@@ -12,7 +12,7 @@ test('configuration accepts HTTPS origin or management URL and rejects unsafe or
     'https://mail.proton.me']) assert.throws(()=>normalizeMcpOrigin(url));
 });
 
-function inject(result,{origin='https://custom.example',expected='https://custom.example',csrf=true}={}){
+function inject(result,{origin='https://custom.example',expected='https://custom.example',csrf=true,date='Thu, 08 Oct 2026 03:42:00 GMT'}={}){
   let calls=0;
   const response=runInNewContext(`(${mcpRequest.toString()})('pair',{account:'test'},${JSON.stringify(expected)})`,{
     location:{origin,pathname:'/proton/import'},
@@ -22,7 +22,7 @@ function inject(result,{origin='https://custom.example',expected='https://custom
       assert.equal(url,'/proton/import/api/extension-pair');
       assert.equal(options.headers['x-csrf-token'],'TEST-CSRF');
       assert.equal(options.credentials,'same-origin');
-      return {ok:true,status:200,json:async()=>result};
+      return {ok:true,status:200,headers:{get:name=>name==='date'?date:null},json:async()=>result};
     }
   });
   return {response,calls:()=>calls};
@@ -60,4 +60,27 @@ test('pair requires nonempty token and future milliseconds, without leaking toke
   for(const pair of [{},{token:'SECRET',expiresAt:1},{token:'',expiresAt:Date.now()+300000}]){
     assert.throws(()=>normalizePairResponse(pair),e=>!e.message.includes('SECRET'));
   }
+});
+
+
+test('authenticated HTTP Date survives serialized injection for clock calibration',async()=>{
+  const r=await inject({token:'TEST',expiresAt:1}).response;
+  assert.equal(r.serverDateMs,Date.parse('Thu, 08 Oct 2026 03:42:00 GMT'));
+  assert.equal((await inject({}, {date:'bad date'}).response).serverDateMs,null);
+});
+
+test('fast or slow device clocks cannot invalidate a fresh server token',()=>{
+  const epoch=Date.parse('Thu, 08 Oct 2026 03:42:00 GMT');
+  const clock=makeServerClock(epoch,1000,50);
+  for(const skew of [-600000,600000]){
+    const now=timeFromServerClock(clock,1050,epoch+skew);
+    assert.equal(now,epoch+3000);
+    assert.equal(normalizePairResponse({token:'TEST',expiresAt:epoch+300000},now).token,'TEST');
+  }
+  assert.throws(()=>normalizePairResponse({token:'TEST',expiresAt:epoch+300000},timeFromServerClock(clock,301050)));
+});
+
+test('invalid server Date is not treated as epoch zero',()=>{
+  assert.equal(makeServerClock(null,10,20),null);
+  assert.equal(makeServerClock(NaN,10,20),null);
 });

@@ -14,6 +14,17 @@ export function normalizeMcpOrigin(value) {
   return url.origin;
 }
 
+// Use the authenticated server's HTTP Date with monotonic elapsed time.
+// Conservatively include the whole round trip and Date's 1-second precision.
+export function makeServerClock(serverDateMs, roundTripMs, monotonicNow) {
+  if (!Number.isFinite(serverDateMs)) return null;
+  return {serverAt:serverDateMs + Math.max(0,roundTripMs) + 1000,monotonicAt:monotonicNow};
+}
+
+export function timeFromServerClock(clock, monotonicNow, fallbackNow = Date.now()) {
+  return clock ? clock.serverAt + Math.max(0,monotonicNow-clock.monotonicAt) : fallbackNow;
+}
+
 export function normalizePairResponse(pair, now = Date.now()) {
   const expiresAt = Number(pair?.expiresAt);
   if (typeof pair?.token !== 'string' || !pair.token.trim() || !Number.isFinite(expiresAt) || expiresAt <= now) {

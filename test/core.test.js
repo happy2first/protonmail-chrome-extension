@@ -194,7 +194,7 @@ test('popup reads cookies by Proton API URLs and auto-selects newest session',()
   const js=readFileSync(new URL('popup.js',root),'utf8');
   assert.match(js,/\/api\/core\/v4\/addresses/);
   assert.match(js,/\/api\/auth\/refresh/);
-  assert.match(js,/sessionCandidates\(rows\)/);
+  assert.match(js,/sessionCandidates\(rows,serverNow\(\)\)/);
   assert.match(js,/最新会话/);
   assert.match(js,/candidates\[0\]\.uid/);
   assert.doesNotMatch(js,/请选择会话并核对邮箱/);
@@ -405,8 +405,8 @@ test('preview and export redact keyPassword while confirmed import keeps in-memo
   const js=readFileSync(new URL('popup.js',root),'utf8');
   assert.match(js,/delete copy\.keyPassword/);
   assert.match(js,/secretIncluded:false/);
-  assert.match(js,/pendingImport = \{bundle, account, envelope, serviceOrigin:mcpOrigin\}/);
-  assert.match(js,/bundle:pending\.bundle/);
+  assert.match(js,/pendingImport = \{bundle, account, envelope, serviceOrigin:mcpOrigin,capturedMono:performance\.now\(\)\}/);
+  assert.match(js,/bundle:uploadBundle/);
   assert.doesNotMatch(js,/JSON\.stringify\(pendingImport\.bundle/);
 });
 
