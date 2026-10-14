@@ -310,7 +310,7 @@ function publicBundle(bundle) {
 
 function importEnvelope(bundle, account) {
   return {
-    format:'personal-mail-mcp-proton-import-preview',
+    format:'mail-mcp-worker-proton-import-preview',
     version:2,
     exportedAt:new Date().toISOString(),
     target:{
